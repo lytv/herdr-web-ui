@@ -125,6 +125,49 @@ export async function checkChatKeepsTerminalSize(browser: Browser, origin: strin
     await phone.locator(".pane-terminal").evaluate((host) => { host.scrollTop = 0; host.scrollLeft = 0; });
     const pan = await dragTerminal(phone, -100, -100);
     assert.ok(pan.x > 0 && pan.y > 0, "a touch drag pans the adopted grid on both axes");
+    await phone.evaluate(() => document.fonts.ready);
+    const overflow = await phone.locator(".pane-terminal").evaluate((host) => ({ x: host.scrollWidth > host.clientWidth, y: host.scrollHeight > host.clientHeight }));
+    assert.deepEqual(overflow, { x: true, y: true }, "the default split box overflows on both axes with a desktop-sized grid");
+    await paneSendText(paneId, "i=1; while [ $i -le 200 ]; do printf 'split-history-%03d\\n' \"$i\"; i=$((i+1)); done");
+    await paneSendKeys(paneId, ["Enter"]);
+    await phone.waitForFunction(() => document.querySelector(".xterm-rows")!.textContent!.includes("split-history-200"));
+    const firstSplit = await phone.locator(".xterm-rows").evaluate((rows) => Number(rows.textContent!.match(/split-history-(\d+)/)![1]));
+    await phone.locator(".pane-terminal").evaluate((host) => { host.scrollTop = 50; host.scrollLeft = 50; });
+    const beforePan = (await framesOf(phone)).length;
+    assert.deepEqual(await dragTerminal(phone, -20, 20), { x: 70, y: 30 }, "movement inside the grid pans without scrolling history");
+    assert.equal((await framesOf(phone)).slice(beforePan).filter((f) => f.dir === "out" && f.type === "input").length, 0);
+    assert.equal((await paneScrollInfo(paneId))!.offset_from_bottom, 0);
+    const top = await dragTerminal(phone, -30, 100);
+    assert.deepEqual(top, { x: 100, y: 0 }, "an overshooting diagonal drag reaches the top edge while panning horizontally");
+    await phone.waitForFunction((first) => Number(document.querySelector(".xterm-rows")!.textContent!.match(/split-history-(\d+)/)?.[1]) < first, firstSplit);
+    const older = await phone.locator(".xterm-rows").evaluate((rows) => Number(rows.textContent!.match(/split-history-(\d+)/)![1]));
+    const topOffset = (await paneScrollInfo(paneId))!.offset_from_bottom;
+    assert.ok(topOffset > 0, "movement beyond the top pan edge reaches earlier output");
+    const rightEdge = await phone.locator(".pane-terminal").evaluate((host) => {
+      host.scrollLeft = host.scrollWidth - host.clientWidth;
+      return host.scrollLeft;
+    });
+    assert.deepEqual(await dragTerminal(phone, -80, 40), { x: rightEdge, y: 0 }, "horizontal movement at the right edge does not block vertical history scrolling");
+    await phone.waitForFunction((first) => Number(document.querySelector(".xterm-rows")!.textContent!.match(/split-history-(\d+)/)?.[1]) < first, older);
+    const oldest = await phone.locator(".xterm-rows").evaluate((rows) => Number(rows.textContent!.match(/split-history-(\d+)/)![1]));
+    const edgeOffset = (await paneScrollInfo(paneId))!.offset_from_bottom;
+    assert.ok(edgeOffset > topOffset, "another drag at the top edge continues through herdr history");
+    const bottomEdge = await phone.locator(".pane-terminal").evaluate((host) => {
+      const bottom = host.scrollHeight - host.clientHeight;
+      host.scrollTop = bottom - 30;
+      host.scrollLeft = 100;
+      return bottom;
+    });
+    const bottom = await dragTerminal(phone, 30, -100);
+    assert.deepEqual(bottom, { x: 70, y: bottomEdge }, "the reverse diagonal drag reaches the bottom edge");
+    await phone.waitForFunction((first) => Number(document.querySelector(".xterm-rows")!.textContent!.match(/split-history-(\d+)/)?.[1]) > first, oldest);
+    assert.ok((await paneScrollInfo(paneId))!.offset_from_bottom < edgeOffset, "movement beyond the bottom pan edge scrolls toward newer output");
+    await phone.locator(".pane-terminal").evaluate((host) => { host.scrollLeft = 0; });
+    assert.deepEqual(await dragTerminal(phone, 80, -40), { x: 0, y: bottomEdge }, "horizontal movement at the left edge does not block vertical history scrolling");
+    await phone.waitForFunction((first) => Number(document.querySelector(".xterm-rows")!.textContent!.match(/split-history-(\d+)/)?.[1]) === first, firstSplit);
+    assert.equal((await paneScrollInfo(paneId))!.offset_from_bottom, 0, "another drag at the bottom edge returns to the latest output");
+    await unchanged();
+    console.log("PASS split-box drags pan within the adopted grid and scroll herdr history past both pan edges without resizing");
     for (const name of ["Terminal", "Chat"]) {
       await phone.getByRole("button", { name: `Expand ${name}`, exact: true }).tap();
       await unchanged();
@@ -150,6 +193,12 @@ export async function checkChatKeepsTerminalSize(browser: Browser, origin: strin
       const before = (await framesOf(phone)).filter((f) => f.dir === "in" && f.type === "role-ack").length;
       await phone.evaluate((mode) => (window as unknown as { sockets_: WebSocket[] }).sockets_.at(-1)!.send(JSON.stringify({ type: "role", mode })), mode);
       await phone.waitForFunction((count) => (window as unknown as { frames_: Frame[] }).frames_.filter((f) => f.dir === "in" && f.type === "role-ack").length > count, before);
+      if (mode === "observe") {
+        await phone.locator(".pane-terminal").evaluate((host) => { host.scrollTop = 0; });
+        const beforeDrag = (await framesOf(phone)).length;
+        await dragTerminal(phone, 0, 100);
+        assert.equal((await framesOf(phone)).slice(beforeDrag).filter((f) => f.dir === "out" && f.type === "input").length, 0, "an observer at the pan edge sends no history input");
+      }
       await unchanged();
     }
     const before = (await framesOf(phone)).filter((f) => f.dir === "in" && f.type === "input-ready").length;

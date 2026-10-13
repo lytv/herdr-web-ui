@@ -1126,16 +1126,17 @@ export function PaneTerminal({
       const across = touchX - first.clientX;
       touchX = first.clientX;
       touchY = first.clientY;
-      const panX = adopted() && host.scrollWidth > host.clientWidth;
-      const panY = adopted() && host.scrollHeight > host.clientHeight;
-      if (panX || panY) {
+      let remaining = delta;
+      if (adopted()) {
+        const panY = Math.max(-host.scrollTop, Math.min(delta, host.scrollHeight - host.clientHeight - host.scrollTop));
         panned = true;
-        host.scrollBy(panX ? across : 0, panY ? delta : 0);
+        host.scrollBy(across, panY);
+        remaining -= panY;
       }
       if (observeRef.current || fixedGridRef.current) return;
-      if (!panY && delta !== 0) {
+      if (remaining !== 0) {
         const target = term.element ?? host;
-        target.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: delta, clientX: first.clientX, clientY: first.clientY }));
+        target.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: remaining, clientX: first.clientX, clientY: first.clientY }));
       }
     };
     const onTouchEnd = (): void => {
