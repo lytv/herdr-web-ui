@@ -159,6 +159,33 @@ export async function checkMobileShell(browser: Browser, origin: string): Promis
     await page.evaluate(() => { (document.activeElement as HTMLElement | null)?.blur(); (window as unknown as { keyboardQA: (value: number | null) => void }).keyboardQA(null); });
     await page.waitForFunction(() => !document.documentElement.hasAttribute("data-keyboard"));
 
+    await page.locator(".mobile-menu-button").tap();
+    await page.getByRole("button", { name: "Open workspace list", exact: true }).tap();
+    const closedRow = page.locator(`.workspace[data-workspace="${first.workspace.workspace_id}"]`);
+    await closedRow.locator(".row-menu-toggle").tap();
+    await page.getByRole("button", { name: "Close workspace", exact: true }).tap();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Close", exact: true }).tap();
+    await closedRow.waitFor({ state: "detached" });
+    await page.waitForFunction(() => document.activeElement?.matches(".mobile-topbar .mobile-menu-button"));
+
+    const gone = await workspaceCreate({ cwd: one, label: "herdr-web-ui-test-mobile-shell-row-gone", focus: false });
+    workspaces.push(gone.workspace.workspace_id);
+    const goneRow = page.locator(`.workspace[data-workspace="${gone.workspace.workspace_id}"]`);
+    await goneRow.locator(".row-menu-toggle").tap();
+    await page.getByRole("button", { name: "Rename workspace", exact: true }).waitFor();
+    await workspaceClose(gone.workspace.workspace_id);
+    await goneRow.waitFor({ state: "detached" });
+    await sheet.waitFor({ state: "detached" });
+    await page.waitForFunction(() => document.activeElement?.matches(".mobile-topbar .mobile-menu-button"));
+
+    await page.locator(".mobile-menu-button").tap();
+    await sheet.getByRole("button", { name: "Command palette", exact: true }).tap();
+    const palette = page.getByRole("dialog", { name: "Command palette", exact: true });
+    await palette.getByRole("searchbox", { name: "Search panes and actions", exact: true }).fill("Add PC");
+    await palette.getByRole("option", { name: "Add PC", exact: true }).tap();
+    await page.getByRole("dialog", { name: "Add PC", exact: true }).getByRole("button", { name: "Close PC setup", exact: true }).tap();
+    await page.waitForFunction(() => document.activeElement?.matches(".mobile-topbar .mobile-menu-button"));
+
     await page.route("**/api/health*", async (route) => {
       const body = await (await route.fetch()).json();
       await route.fulfill({ json: { ...body, herdr: null } });
@@ -207,6 +234,12 @@ export async function checkMobileShellDesktop(browser: Browser, origin: string, 
     assert.equal(await page.locator(".app-header").isVisible(), true, "the desktop keeps its header");
     assert.equal(await page.locator(".view-switch").isVisible(), true, "the desktop keeps its lens switch");
     assert.equal(await page.locator(".mobile-chrome").count(), 0, "no mobile chrome on the desktop");
+    await page.locator(".app-header .palette-button").click();
+    const palette = page.getByRole("dialog", { name: "Command palette", exact: true });
+    await palette.getByRole("searchbox", { name: "Search panes and actions", exact: true }).fill("Add PC");
+    await palette.getByRole("option", { name: "Add PC", exact: true }).click();
+    await page.getByRole("dialog", { name: "Add PC", exact: true }).getByRole("button", { name: "Close PC setup", exact: true }).click();
+    await page.waitForFunction(() => document.activeElement?.matches(".app-header .sidebar-toggle"));
     assert.deepEqual(errors, []);
     console.log("PASS the desktop shell is unchanged");
   } finally {
