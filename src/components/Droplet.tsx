@@ -49,8 +49,7 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
 
   useLayoutEffect(() => {
     // the bar is queried on every measure, never captured: the phone's shell swaps its chrome
-    // under a steady component, and a captured node reads zero once detached. The shell itself
-    // never leaves, so watching it re-measures across every swap and resize.
+    // under a steady component, and a captured node reads zero once detached.
     const shell = document.querySelector<HTMLElement>(".app");
     const measure = () => {
       const safeTop = Number.parseFloat(getComputedStyle(probe.current!).paddingTop) || 0;

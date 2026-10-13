@@ -41,6 +41,9 @@ export async function checkMobileShell(browser: Browser, origin: string): Promis
     workspaces.push(second.workspace.workspace_id);
     assert.equal((await sessionSnapshot()).focused_pane_id, focused, "fixture workspaces leave herdr focus unchanged");
     const page = await context.newPage();
+    const cdp = await context.newCDPSession(page);
+    const safeArea = { top: 47, left: 12, right: 20 };
+    await cdp.send("Emulation.setSafeAreaInsetsOverride", { insets: safeArea });
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
     const evidence = process.env.UI_EVIDENCE_DIR;
@@ -60,6 +63,14 @@ export async function checkMobileShell(browser: Browser, origin: string): Promis
     assert.ok((await page.locator(".mobile-title-text").innerText()).length > 0, "the top bar names the session");
     assert.ok((await page.locator(".mobile-crumb").innerText()).includes("›"), "the crumb says where the session is");
     assert.equal(await page.locator(".mobile-topbar .header-more-button").isVisible(), true, "the top bar has the menu button");
+    const header = await page.locator(".mobile-topbar").evaluate((bar) => {
+      const style = getComputedStyle(bar);
+      return { height: bar.getBoundingClientRect().height, base: Number.parseFloat(style.getPropertyValue("--header-h")),
+        gap: Number.parseFloat(style.getPropertyValue("--space-3")), left: Number.parseFloat(style.paddingLeft), right: Number.parseFloat(style.paddingRight) };
+    });
+    assert.equal(header.height, header.base + safeArea.top, "the mobile header reserves the same top safe area as the desktop header");
+    assert.equal(header.left, header.gap + safeArea.left, "header controls clear the left safe area");
+    assert.equal(header.right, header.gap + safeArea.right, "header controls clear the right safe area");
 
     // one slide bar: a pill per session with its status, the open one selected, + new at the end
     const bar = page.locator(".slide-bar");
@@ -109,6 +120,17 @@ export async function checkMobileShell(browser: Browser, origin: string): Promis
     await screenshot("menu-sheet");
     await sheet.getByRole("button", { name: "Cancel", exact: true }).tap();
     await sheet.waitFor({ state: "hidden" });
+    await page.locator(".mobile-topbar .header-more-button").tap();
+    await sheet.getByRole("button", { name: "Open workspace list", exact: true }).tap();
+    await page.locator(".sidebar.is-open").waitFor();
+    const headerBottom = (await page.locator(".mobile-topbar").boundingBox())!.y + header.height;
+    assert.equal((await page.locator(".sidebar").boundingBox())!.y, headerBottom, "the drawer starts at the safe-area header edge");
+    assert.equal((await page.locator(".scrim").boundingBox())!.y, headerBottom, "the scrim covers the slide bar from the header edge");
+    await screenshot("safe-area-drawer");
+    await page.locator(".scrim").tap({ position: { x: 366, y: 40 } });
+    await page.locator(".sidebar.is-open").waitFor({ state: "detached" });
+    await cdp.send("Emulation.setSafeAreaInsetsOverride", { insets: { top: 0, left: 0, right: 0 } });
+    await page.waitForFunction((height) => document.querySelector(".mobile-topbar")!.getBoundingClientRect().height === height, header.base);
 
     // a keyboard-height shell shrinks the boxes instead of sliding them under it: the
     // composer's focus plus a halved visual viewport is the real keyboard path
