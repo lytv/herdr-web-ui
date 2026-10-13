@@ -293,12 +293,16 @@ One set for both themes: the card is island black wherever it shows.
   `.terminal-host`. While a phone's soft keyboard is up (`data-keyboard`), `--app-height` follows
   `visualViewport` so the keyboard does not cover input; otherwise the shell is `100dvh`, because an
   iPhone home screen app reports a visual viewport shorter than the screen without a keyboard.
-- The header is one line at every width. Anatomy, left to right: mobile drawer toggle / desktop
+- The header is one line at every desktop width. Anatomy, left to right: mobile drawer toggle / desktop
   sidebar toggle and the command palette (`.header-side`); the flexible context, agent mark and
   title then the PC › workspace › folder crumb; segmented Chat/Terminal switch; the connection
   chip while the bridge is not live (herdr version in its tooltip), the offline pill, sign out and
   the More menu (`⋯`). Theme lives in Settings and the palette; the herdr version is also read
-  in Settings.
+  in Settings. Below `769px` with a pane selected, `MobileChrome` replaces the header: one slim
+  top bar (connection dot, title plus one-line crumb, `⋯` button) over a slide bar of workspace
+  pills with status dots and a new-workspace entry (`.slide-bar`), and the pane's chat and terminal
+  stacked in one vertical split below (each box expands over the split and collapses back, one at
+  a time). Without a selected pane the phone keeps the `--bg-panel` header bar.
 - From `769px` the header is two zones. Over the sidebar, `.header-side` is the sidebar's own top
   row (toggle at its start, palette at its end) on `--bg-panel`, as wide as `--sidebar-w`, and the
   sidebar's seam runs to the top of the window. Over the pane, the header takes the pane's
@@ -308,9 +312,10 @@ One set for both themes: the card is island black wherever it shows.
   it from `769px` (`--strip-bg`: `--bg` under the chat lens, `--term-bg` otherwise, `--bg-panel`
   below `769px`) and keeps its hairline, under the chat the one line over the transcript (no
   fade under it). The update notice and a PC's action banner are drawn in the pane column, over
-  the tab strip, never across the window: the sidebar and its top row stay one piece. With the
-  sidebar collapsed the toggle and the palette sit in the one bar. Below `769px` the header is the `--bg-panel` bar with
-  its rule: the installed app's `theme-color` matches it.
+  the tab strip, never across the window: the sidebar and its top row stay one piece. On the phone
+  shell they hold no rows: they live at the top of the ⋯ sheet with a dot on its button. With the
+  sidebar collapsed the toggle and the palette sit in the one bar. Below `769px` without a selected pane the header is the `--bg-panel` bar with
+  its rule: the installed app's `theme-color` matches it. With a pane selected the tab strip is replaced by the slide bar.
 - From `769px` the sidebar's right edge is a grip (`.sidebar-resizer`, `role="separator"`): drag
   it to resize the sidebar between `240px` and `520px`, never past half the window; the arrow
   keys move the focused edge `16px`, Home and End go to the limits, and a double-click returns to
