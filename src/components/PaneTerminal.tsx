@@ -7,6 +7,7 @@ import "@xterm/xterm/css/xterm.css";
 import "./PaneTerminal.css";
 
 import { HerdrSocket, type SubmitResult } from "../lib/ws.ts";
+import { MOBILE_QUERY } from "../lib/useMediaQuery.ts";
 import { clipboardKey, hasModifiers, physicalKey, terminalChord, navigationSequence, keyFromData, ctrlEnterSequence, modifyOtherKeysLevel, NO_STICKY_MODIFIERS, type StickyModifiers } from "../lib/keys.ts";
 import { keyBarInputSequence, type KeyBarKeyItem } from "../lib/keyBar.ts";
 import { EMPTY_DRAFT, applyToDraft, draftIsEmpty, type InputDraft } from "../lib/draft.ts";
@@ -63,8 +64,7 @@ export interface PaneTerminalProps {
   view: PaneView;
   /**
    * the phone's two boxes: the chat tree and the live grid render at once, each in its own
-   * box, instead of the exclusive lens switch. The remembered lens is then display only;
-   * the socket, the focus and the refit behave as the terminal, which stays visible.
+   * box, instead of the exclusive lens switch.
    */
   split?: boolean;
   /** App selected this pane itself (the selected one closed): switching to it must not take the keyboard */
@@ -140,12 +140,14 @@ export function PaneTerminal({
   const uploadFileRef = useRef(uploadPaneImage);
   uploadFileRef.current = uploadPaneImage;
   const chatLens = view === "chat";
-  // in the split the grid stays visible whatever the remembered lens: it owns the socket,
-  // the focus and the refit, while the chat tree draws in its own box too
   const chatView = chatLens && !split;
   const showChat = chatLens || split;
   const chatViewRef = useRef(chatView);
   chatViewRef.current = chatView;
+  const mobile = useMediaQuery(MOBILE_QUERY);
+  const keepSize = mobile || split || chatView;
+  const keepSizeRef = useRef(keepSize);
+  keepSizeRef.current = keepSize;
   /** read by the wheel handler, which is attached once for the terminal's life */
   const wheelSpeedRef = useRef(terminalWheelSpeed);
   wheelSpeedRef.current = terminalWheelSpeed;
@@ -508,7 +510,7 @@ export function PaneTerminal({
     // drag pans it. Until the user pans, the view keeps the cursor's row in sight: the top of
     // the grid while the row fits there, else the bottom rows, where a prompt sits. A mirror
     // has no cursor; xterm's own rests on the last row with text, which serves the same.
-    const adopted = (): boolean => observeRef.current || fixedGridRef.current;
+    const adopted = (): boolean => observeRef.current || fixedGridRef.current || keepSizeRef.current;
     let panned = false;
     const followCursor = (): void => {
       host.toggleAttribute("data-adopted-grid", adopted());
@@ -855,7 +857,7 @@ export function PaneTerminal({
         setObserving(nowObserving);
         term.options.disableStdin = nowObserving || secretRef.current !== null || heldRef.current;
         onRoleAckRef.current?.(message.mode);
-        if (!nowObserving && !fixedGridRef.current && !chatViewRef.current) {
+        if (!nowObserving && !fixedGridRef.current && !keepSizeRef.current) {
           try {
             fit.fit();
           } catch {
@@ -875,7 +877,7 @@ export function PaneTerminal({
         // chat lens entered later must draw its hidden screen for that grid, not this device's
         sharedGridRef.current = { cols: message.cols, rows: message.rows };
         // the chat lens adopts the shared grid too: the screen it reads (a masked prompt) is drawn for it
-        if (!observeRef.current && !fixedGridRef.current && !chatViewRef.current) return;
+        if (!adopted()) return;
         if (term.cols !== message.cols || term.rows !== message.rows) term.resize(message.cols, message.rows);
         panned = false;
         followCursor();
@@ -1086,9 +1088,6 @@ export function PaneTerminal({
           followCursor();
           return;
         }
-        // the chat lens covers the grid: a phone's viewport or keyboard must not resize the
-        // shared pty under another device (#361); the switch back to the terminal refits
-        if (chatViewRef.current) return;
         try {
           fit.fit();
         } catch {
@@ -1154,7 +1153,7 @@ export function PaneTerminal({
     // connections never do this: they own no geometry to re-assert.
     const refit = (): void => {
       const current = paneRef.current;
-      if (!current || observeRef.current || fixedGridRef.current || chatViewRef.current) return;
+      if (!current || adopted()) return;
       try {
         fit.fit();
       } catch {
@@ -1235,7 +1234,7 @@ export function PaneTerminal({
       if (term.options.fontSize === terminalFontSize && term.options.fontFamily === fontFamily) return;
       term.options.fontSize = terminalFontSize;
       term.options.fontFamily = fontFamily;
-      if (observeRef.current || fixedGridRef.current || chatViewRef.current) return;
+      if (observeRef.current || fixedGridRef.current || keepSizeRef.current) return;
       try {
         fitRef.current?.fit();
       } catch {
@@ -1252,7 +1251,8 @@ export function PaneTerminal({
   // the grid must re-fit when the lens switches back: the chat lens covered it, and a
   // resize while covered may have been skipped by a zero-size layout
   useEffect(() => {
-    if (chatView) {
+    hostRef.current?.toggleAttribute("data-adopted-grid", observeRef.current || fixedGridRef.current || keepSize);
+    if (keepSize) {
       const pane = paneRef.current;
       if (pane) socketRef.current?.keepSize(pane);
       // the grid another device left the pty at while this one showed the terminal
@@ -1271,7 +1271,7 @@ export function PaneTerminal({
     const pane = paneRef.current;
     if (pane && term) socketRef.current?.resize(pane, term.cols, term.rows, true);
     if (!autoSelected && !coarseRef.current) term?.focus();
-  }, [chatView]);
+  }, [keepSize]);
 
   // Reset synchronously on pane changes: old composition timers must never see the new pane.
   useLayoutEffect(() => {
@@ -1289,8 +1289,7 @@ export function PaneTerminal({
     setUnsupported(false);
     fixedGridRef.current = false;
     sharedGridRef.current = null;
-    // the next pane's grid is this browser's again unless it says otherwise (pane-geometry)
-    hostRef.current?.toggleAttribute("data-adopted-grid", observeRef.current);
+    hostRef.current?.toggleAttribute("data-adopted-grid", observeRef.current || keepSizeRef.current);
     secretRef.current = null;
     setSecret(null);
     term.options.disableStdin = observeRef.current;
@@ -1305,12 +1304,14 @@ export function PaneTerminal({
     term.reset();
     modifyOtherKeysRef.current = 0;
     if (!paneId) return;
-    try {
-      fit?.fit();
-    } catch {
-      /* not laid out yet; the ResizeObserver will follow up */
+    if (!observeRef.current && !keepSizeRef.current) {
+      try {
+        fit?.fit();
+      } catch {
+        /* not laid out yet; the ResizeObserver will follow up */
+      }
     }
-    socket.attach(paneId, term.cols, term.rows, chatViewRef.current);
+    socket.attach(paneId, term.cols, term.rows, keepSizeRef.current);
     // the chat lens covers the grid and its composer takes the keyboard: focusing the hidden
     // grid sent the keys straight to the pane, and showed a phone's IME text mid-screen
     if (!chatViewRef.current && !autoSelected && !coarseRef.current) term.focus();
