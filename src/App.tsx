@@ -706,7 +706,7 @@ export function App() {
   // below the drawer's breakpoint the chrome is the slim bar plus the slide bar, and the
   // terminal shows both lenses at once in the same host instead of the remembered one alone
   const mobile = useMediaQuery(MOBILE_QUERY);
-  const isMobileShell = mobile && snapshot !== null && selectedPane !== null && selectedWorkspace !== null && selectedTitle !== null;
+  const isMobileShell = mobile && snapshot !== null && selectedPaneId !== null;
 
   // the ⋯ sheet on a phone: the palette first, then the drawer tree and settings (both full
   // overlays from there), then the header menu's own items. Notices open above these.
@@ -794,7 +794,7 @@ export function App() {
           connTitle={connTitle}
           connected={connected}
           herdrOnline={!!targetHerdr}
-          title={selectedTitle}
+          title={selectedTitle ?? selectedMachine?.name ?? selectedMachineId}
           crumb={crumb}
           agent={selectedAgent}
           updates={updates}

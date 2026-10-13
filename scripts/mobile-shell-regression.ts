@@ -178,6 +178,41 @@ export async function checkMobileShell(browser: Browser, origin: string): Promis
     await sheet.waitFor({ state: "detached" });
     await page.waitForFunction(() => document.activeElement?.matches(".mobile-topbar .mobile-menu-button"));
 
+    const selectedGone = await workspaceCreate({ cwd: one, label: "herdr-web-ui-test-mobile-shell-selected-gone", focus: false });
+    workspaces.push(selectedGone.workspace.workspace_id);
+    await page.locator(".scrim").tap({ position: { x: 366, y: 40 } });
+    await page.locator(".sidebar.is-open").waitFor({ state: "detached" });
+    const selectedGonePill = bar.getByRole("tab", { name: "herdr-web-ui-test-mobile-shell-selected-gone" });
+    await selectedGonePill.tap();
+    await page.waitForFunction((label) => document.querySelector('.slide-bar [role="tab"][aria-selected="true"]')?.textContent?.includes(label) === true, "herdr-web-ui-test-mobile-shell-selected-gone");
+    let releaseSession!: () => void;
+    const sessionHeld = new Promise<void>((resolve) => { releaseSession = resolve; });
+    const sessionRead = (url: URL) => url.pathname.endsWith("/session");
+    await page.route(sessionRead, async (route) => {
+      await sessionHeld;
+      await route.continue();
+    });
+    await page.evaluate(() => {
+      const seen = { header: false };
+      Object.assign(window, { selectionGap: seen });
+      new MutationObserver(() => { if (document.querySelector(".app-header")) seen.header = true; }).observe(document.body, { childList: true, subtree: true });
+    });
+    await page.locator(".mobile-menu-button").tap();
+    await page.getByRole("button", { name: "Open workspace list", exact: true }).tap();
+    const selectedRow = page.locator(`.workspace[data-workspace="${selectedGone.workspace.workspace_id}"]`);
+    await selectedRow.locator(".row-menu-toggle").tap();
+    await page.getByRole("button", { name: "Close workspace", exact: true }).tap();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Close", exact: true }).tap();
+    await selectedRow.waitFor({ state: "detached" });
+    await page.waitForFunction(() => document.activeElement?.matches(".mobile-topbar .mobile-menu-button"));
+    assert.equal(await page.locator(".slide-bar").isVisible(), true, "the slide bar stays while the closed pane's fallback loads");
+    assert.equal(await page.locator(".split-msg").isVisible(), true, "the split stays mounted while the fallback loads");
+    releaseSession();
+    await page.waitForFunction((label) => !document.querySelector('.slide-bar [role="tab"][aria-selected="true"]')?.textContent?.includes(label), "herdr-web-ui-test-mobile-shell-selected-gone");
+    await page.unroute(sessionRead);
+    assert.equal(await page.evaluate(() => (window as unknown as { selectionGap: { header: boolean } }).selectionGap.header), false, "a closed selected pane never shows the desktop header on a phone");
+    await page.waitForFunction(() => document.activeElement?.matches(".mobile-topbar .mobile-menu-button"));
+
     await page.locator(".mobile-menu-button").tap();
     await sheet.getByRole("button", { name: "Command palette", exact: true }).tap();
     const palette = page.getByRole("dialog", { name: "Command palette", exact: true });
