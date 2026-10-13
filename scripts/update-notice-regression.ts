@@ -190,7 +190,107 @@ export async function checkUpdateNotice(browser: Browser, origin: string, shots?
     await menuNamed("More · alerts are off");
     assert.deepEqual(errors, []);
     console.log("PASS the line for a PC that needs a bridge update closes and stays closed until the PC connects");
+    await checkNoticeMenuInput(browser, origin, status, pc);
   } finally {
     await context.close();
   }
+}
+
+async function checkNoticeMenuInput(browser: Browser, origin: string, fixture: UpdateStatus, pc: Machine): Promise<void> {
+  for (const width of [390, 700]) {
+    const context = await browser.newContext({ viewport: { width, height: 844 }, isMobile: true, hasTouch: true, locale: "en-US" });
+    try {
+      await context.addInitScript(() => {
+        localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
+        document.addEventListener("mousedown", (event) => {
+          if (event.defaultPrevented || !(event.target instanceof Element) || !event.target.closest(".row-sheet-head button, .row-menu-header button")) return;
+          event.preventDefault();
+          (document.activeElement as HTMLElement | null)?.blur();
+        });
+      });
+      const page = await context.newPage();
+      const errors: string[] = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      let status: UpdateStatus = { ...fixture, phase: "checking", available: true };
+      let installs = 0;
+      let bridgeUpdates = 0;
+      await page.route("**/api/updates", (route) => route.fulfill({ json: status }));
+      await page.route("**/api/updates/install", (route) => {
+        installs += 1;
+        status = { ...status, phase: "checking", available: false };
+        return route.fulfill({ status: 202, json: { accepted: true } });
+      });
+      await page.route("**/api/machines/events", (route) => route.abort());
+      await page.route("**/api/machines", async (route) => {
+        const body = await (await route.fetch()).json() as { machines: Machine[] };
+        await route.fulfill({ json: { ...body, machines: [...body.machines, pc] } });
+      });
+      await page.route("**/api/machines/qa-pc/update-bridge", (route) => {
+        bridgeUpdates += 1;
+        return route.fulfill({ status: 202, json: { accepted: true } });
+      });
+      const initialStatus = page.waitForResponse((response) => response.url().endsWith("/api/updates"));
+      await page.goto(origin);
+      await initialStatus;
+      await page.getByText("QA PC", { exact: true }).waitFor({ state: "attached" });
+      await page.locator(".conn-live").waitFor();
+      await page.locator(".mobile-menu-button").click();
+      const menu = page.locator(".row-sheet, .row-menu");
+      await menu.getByText("QA PC needs a bridge update to reconnect.", { exact: true }).waitFor();
+      const focused = async (name: string) => assert.equal(await menu.getByRole("button", { name, exact: true }).evaluate((button) => document.activeElement === button), true, `${width}px: ${name} receives focus`);
+      await page.waitForFunction(() => document.querySelector(".row-sheet, .row-menu")?.contains(document.activeElement));
+      await focused("Update bridge");
+      await page.keyboard.press("Home");
+      assert.equal(await menu.getByRole("button", { name: "Update", exact: true }).isDisabled(), true);
+      await focused("Update bridge");
+      status = { ...status, phase: "idle" };
+      await page.waitForFunction(() => [...document.querySelectorAll<HTMLButtonElement>(".update-notice button")].some((button) => button.textContent === "Update" && !button.disabled));
+      await page.keyboard.press("Home");
+      await focused("Update");
+      const last = menu.locator('.row-sheet-item, .row-sheet-cancel, [role="menuitem"], [role="menuitemcheckbox"]').last();
+      await page.keyboard.press("End");
+      assert.equal(await last.evaluate((button) => document.activeElement === button), true);
+      await page.keyboard.press("ArrowDown");
+      await focused("Update");
+      await page.keyboard.press("ArrowUp");
+      assert.equal(await last.evaluate((button) => document.activeElement === button), true);
+      await page.keyboard.press("Home");
+      await page.keyboard.press("ArrowDown");
+      await focused("Update bridge");
+      await page.keyboard.press("ArrowDown");
+      await focused("Dismiss");
+      await page.keyboard.press("ArrowUp");
+      await focused("Update bridge");
+      const bridgeResponse = page.waitForResponse((response) => response.url().endsWith("/qa-pc/update-bridge"));
+      await page.keyboard.press("Enter");
+      await bridgeResponse;
+      assert.equal(bridgeUpdates, 1);
+      await page.keyboard.press("Home");
+      if (width === 390) {
+        await page.keyboard.press("Shift+Tab");
+        await focused("Cancel");
+        await page.keyboard.press("Tab");
+        await focused("Update");
+        await page.keyboard.press("Tab");
+        await focused("Update bridge");
+        await page.keyboard.press("Shift+Tab");
+        await focused("Update");
+      } else {
+        await page.keyboard.press("Tab");
+        await menu.waitFor({ state: "detached" });
+        await page.locator(".mobile-menu-button").click();
+        await menu.waitFor();
+      }
+      await page.keyboard.press("End");
+      await menu.getByRole("button", { name: "Update", exact: true }).click();
+      await menu.getByText("Starting the update…", { exact: true }).waitFor();
+      assert.equal(installs, 1, `${width}px: a non-focusing pointer press still installs from the notice`);
+      await menu.getByRole("button", { name: "Dismiss", exact: true }).click();
+      await menu.getByText("QA PC needs a bridge update to reconnect.", { exact: true }).waitFor({ state: "hidden" });
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  }
+  console.log("PASS sheet and popover notice buttons support keyboard navigation and non-focusing pointer presses");
 }

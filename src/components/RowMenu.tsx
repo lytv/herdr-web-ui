@@ -51,9 +51,9 @@ interface Props {
 const SHEET_QUERY = "(max-width: 640px)";
 const GAP = 4;
 const EDGE = 8;
-const POPOVER_ITEMS = '[role="menuitem"], [role="menuitemcheckbox"]';
+const POPOVER_ITEMS = '.row-menu-header button:not(:disabled), [role="menuitem"], [role="menuitemcheckbox"]';
 // the sheet is modal: its Cancel is one of the stops
-const SHEET_ITEMS = '.row-sheet-item, .row-sheet-cancel';
+const SHEET_ITEMS = '.row-sheet-head button:not(:disabled), .row-sheet-item, .row-sheet-cancel';
 
 export function RowMenu({ anchor, title, subtitle, header, items, align = "end", onClose }: Props) {
   const t = useT();
@@ -142,7 +142,7 @@ export function RowMenu({ anchor, title, subtitle, header, items, align = "end",
   // Safari on a Mac does not focus a clicked button, so the press would blur the focused item
   // with no relatedTarget, close the menu, and the click would land on nothing: the press keeps
   // the focus where it is, and the click still comes
-  const keepFocus = (event: ReactMouseEvent<HTMLButtonElement>): void => event.preventDefault();
+  const keepFocus = (event: ReactMouseEvent<HTMLElement>): void => event.preventDefault();
 
   const run = (item: RowMenuItem): void => {
     onClose();
@@ -154,7 +154,7 @@ export function RowMenu({ anchor, title, subtitle, header, items, align = "end",
       <div className="modal-scrim">
         <div ref={surface} className="modal row-sheet" role="dialog" aria-modal="true" aria-label={title} onKeyDown={onKeyDown} onBlur={onBlur}>
           <span className="row-sheet-grip" aria-hidden="true" />
-          {header ? <div className="row-sheet-head">{header}</div> : (
+          {header ? <div className="row-sheet-head" onMouseDown={keepFocus}>{header}</div> : (
             <div className="row-sheet-head">
               <span className="row-sheet-title">{title}</span>
               {subtitle && <span className="row-sheet-subtitle">{subtitle}</span>}
@@ -176,7 +176,7 @@ export function RowMenu({ anchor, title, subtitle, header, items, align = "end",
 
   return createPortal(
     <div ref={surface} className="menu row-menu" role="menu" aria-label={title} style={place ?? { visibility: "hidden" }} onKeyDown={onKeyDown} onBlur={onBlur}>
-      {header && <div className="row-menu-header" role="presentation">{header}</div>}
+      {header && <div className="row-menu-header" role="presentation" onMouseDown={keepFocus}>{header}</div>}
       {items.map((item) => (
         <Fragment key={item.id}>
           {item.divider && <span className="row-menu-divider" role="separator" />}
