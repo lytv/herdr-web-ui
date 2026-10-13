@@ -7,7 +7,7 @@ import "@xterm/xterm/css/xterm.css";
 import "./PaneTerminal.css";
 
 import { HerdrSocket, type SubmitResult } from "../lib/ws.ts";
-import { MOBILE_QUERY } from "../lib/useMediaQuery.ts";
+import { MOBILE_QUERY, useMediaQuery } from "../lib/useMediaQuery.ts";
 import { clipboardKey, hasModifiers, physicalKey, terminalChord, navigationSequence, keyFromData, ctrlEnterSequence, modifyOtherKeysLevel, NO_STICKY_MODIFIERS, type StickyModifiers } from "../lib/keys.ts";
 import { keyBarInputSequence, type KeyBarKeyItem } from "../lib/keyBar.ts";
 import { EMPTY_DRAFT, applyToDraft, draftIsEmpty, type InputDraft } from "../lib/draft.ts";
@@ -97,19 +97,6 @@ function storedDirectTyping(): boolean {
   try { return window.localStorage.getItem(DIRECT_TYPING_KEY) === "1"; } catch { return false; }
 }
 
-/** Follows a media query: the layout rules that CSS alone cannot apply. */
-function useMediaQuery(query: string): boolean {
-  const [matches, setMatches] = useState(() => typeof window !== "undefined" && window.matchMedia?.(query).matches === true);
-  useEffect(() => {
-    const media = window.matchMedia?.(query);
-    if (!media) return;
-    const onChange = (): void => setMatches(media.matches);
-    onChange();
-    media.addEventListener("change", onChange);
-    return () => media.removeEventListener("change", onChange);
-  }, [query]);
-  return matches;
-}
 export function PaneTerminal({
   paneId,
   restoreError = null,
@@ -1934,8 +1921,8 @@ export function PaneTerminal({
       )}
       {!split && banners}
       <div key="termsurface" className="terminal-surface">
-        {split && banners}
         {split && splitHead("term")}
+        {split && banners}
         {mount}
         {!split && chatOverlay}
       </div>

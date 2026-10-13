@@ -298,7 +298,7 @@
   content-visibility: hidden;
 }
 
-/* ---------- the phone's two boxes (MobileShell.tsx, split mode) ---------- */
+/* ---------- the phone's two boxes (split mode) ---------- */
 
 /* The stack is the content area: the message box over the terminal box, each with its
    head. One box's Expand covers the area (data-full); the other hides but stays mounted,
@@ -328,11 +328,15 @@
 /* one box expanded covers the content area; the other hides but stays mounted, so the
    xterm grid and the transcript keep their state. The terminal's pieces hide one by one:
    they are separate flex children, not one box. */
-.terminal-stack.is-split[data-full="chat"] .terminal-surface,
+.terminal-stack.is-split[data-full="chat"] .terminal-surface > .split-head,
+.terminal-stack.is-split[data-full="chat"] .pane-terminal,
 .terminal-stack.is-split[data-full="chat"] .terminal-input,
-.terminal-stack.is-split[data-full="chat"] .key-bar,
-.terminal-stack.is-split[data-full="chat"] .secret-input {
+.terminal-stack.is-split[data-full="chat"] .key-bar {
   display: none;
+}
+
+.terminal-stack.is-split[data-full="chat"] .terminal-surface {
+  display: contents;
 }
 
 .terminal-stack.is-split[data-full="term"] .split-msg {
@@ -410,7 +414,13 @@
   min-height: 0;
 }
 
-/* the key bar belongs to the terminal box alone: it never renders under messages */
-.split-msg .key-bar {
+.terminal-stack.is-split .terminal-banners {
+  position: static;
+  flex: 0 0 auto;
+  max-width: 100%;
+  padding: var(--space-2) var(--space-3);
+}
+
+.terminal-stack.is-split .terminal-banners:empty {
   display: none;
 }

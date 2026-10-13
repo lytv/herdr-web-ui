@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import type { Browser } from "playwright-core";
 import type { Machine } from "../shared/machines.ts";
-import type { UpdateStatus } from "../shared/update.ts";
+import type { InstalledNotes, UpdateStatus } from "../shared/update.ts";
 
 /**
  * The notices in the phone's ⋯ sheet: a release installs from its line with one button
@@ -20,13 +20,17 @@ export async function checkUpdateNotice(browser: Browser, origin: string, shots?
     page.on("pageerror", (error) => errors.push(error.message));
     const shot = async (name: string) => { if (shots) await page.screenshot({ path: join(shots, `${name}.png`) }); };
 
+    const revision = Bun.spawnSync(["git", "rev-parse", "HEAD"]).stdout.toString().trim();
     let status: UpdateStatus = {
-      managed: true, auto_update: false, phase: "idle", current_revision: null, latest_revision: "b".repeat(40),
-      current_version: "0.0.1", latest_version: "9.9.9", available: true, checked_at: new Date().toISOString(), blocked_reason: null, error: null, step: null,
+      managed: true, auto_update: false, phase: "checking", current_revision: null, latest_revision: null,
+      current_version: "0.0.1", latest_version: null, available: false, checked_at: new Date().toISOString(), blocked_reason: null, error: null, step: null,
     };
+    const installed: InstalledNotes = { revision, version: "9.9.8", previous_version: "9.9.7", installed_at: new Date().toISOString(), omitted: 0,
+      releases: [{ version: "9.9.8", date: null, notes: "Fictional installed-release fixture." }] };
     let installs = 0;
     let checks = 0;
     await page.route("**/api/updates", (route) => route.fulfill({ json: status }));
+    await page.route("**/api/updates/installed", (route) => route.fulfill({ json: installed }));
     await page.route("**/api/updates/install", async (route) => {
       installs += 1;
       // as the updater does: an install starts with a check, which reports nothing available yet
@@ -47,7 +51,9 @@ export async function checkUpdateNotice(browser: Browser, origin: string, shots?
       await route.fulfill({ json: { ...body, machines: remote ? [...body.machines, remote] : body.machines } });
     });
 
+    const firstStatus = page.waitForResponse((response) => response.url().endsWith("/api/updates"));
     await page.goto(origin);
+    await firstStatus;
     const notice = page.locator(".update-notice").filter({ hasText: /herdr web ui|update|Step|Starting/i }).first();
     const fits = async (label: string) => assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `${label}: nothing overflows sideways`);
     // on a phone the notices hold no rows: an update on offer dots the ⋯ menu, and its
@@ -58,6 +64,22 @@ export async function checkUpdateNotice(browser: Browser, origin: string, shots?
       await sheet.waitFor();
     };
     await page.locator(".conn-live").waitFor();
+    await openSheet();
+    assert.equal(await page.locator(".mobile-notices .update-notice").count(), 0, "background checking renders no notice");
+    assert.equal(await page.locator(".mobile-menu-dot").count(), 0, "background checking shows no notice dot");
+    await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+    status = { ...status, phase: "idle", current_revision: revision, latest_revision: revision, current_version: "9.9.8", latest_version: "9.9.8" };
+    await page.locator(".mobile-menu-dot").waitFor();
+    await openSheet();
+    await page.getByText("herdr web ui was updated to v9.9.8.", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "What's new", exact: true }).click();
+    await page.getByRole("dialog", { name: "Settings", exact: true }).getByText("Fictional installed-release fixture.").waitFor();
+    assert.equal(await page.locator(".mobile-menu-dot").count(), 0, "opening installed notes dismisses their dot");
+    await page.getByRole("button", { name: "Close settings", exact: true }).click();
+    status = { ...status, current_revision: null, latest_revision: "b".repeat(40), current_version: "0.0.1", latest_version: "9.9.9", available: true };
+    await page.reload();
+    await page.locator(".conn-live").waitFor();
+    await page.locator(".mobile-menu-dot").waitFor();
     assert.equal(await page.locator(".pane-column > .update-notice").count(), 0, "no notice holds a row on a phone");
     assert.equal(await page.locator(".mobile-menu-dot").count(), 1, "an update on offer dots the menu");
 
@@ -98,6 +120,11 @@ export async function checkUpdateNotice(browser: Browser, origin: string, shots?
     status = { ...status, phase: "error", available: false, error: "git fetch failed: fixture" };
     await page.getByText("The update could not be installed.", { exact: true }).waitFor();
     await page.getByRole("button", { name: "Details", exact: true }).waitFor();
+    await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+    await sheet.waitFor({ state: "detached" });
+    assert.equal(await page.locator(".mobile-menu-dot").count(), 1, "a failed install with no available release still dots the closed menu");
+    await openSheet();
+    await page.getByRole("button", { name: "Try again", exact: true }).waitFor();
     // the server refuses an install with nothing available: Try again looks for the release again
     await page.getByRole("button", { name: "Try again", exact: true }).click();
     await page.getByText("herdr web ui v9.9.9 is available.", { exact: true }).waitFor();
@@ -118,6 +145,7 @@ export async function checkUpdateNotice(browser: Browser, origin: string, shots?
     await page.locator(".update-notice").getByRole("button", { name: "Dismiss", exact: true }).click();
     await line.waitFor({ state: "hidden" });
     assert.equal(await dismissed(), JSON.stringify(["qa-pc:update_bridge"]));
+    assert.equal(await page.locator(".mobile-menu-dot").count(), 0, "dismissing the PC line removes the dot without a roster change");
     // a retry that fails brings the PC back to the same state: still closed, also after a reload
     remote = { ...pc, state: "reconnecting", action_required: null };
     await page.reload();
@@ -129,6 +157,7 @@ export async function checkUpdateNotice(browser: Browser, origin: string, shots?
     assert.equal(await line.count(), 0, "the closed line stays closed through a failed retry and a reload");
     assert.equal(await dismissed(), JSON.stringify(["qa-pc:update_bridge"]));
     await shot("5-bridge-line-closed");
+    await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
     // once the PC has connected, the next time it waits is news again
     remote = { ...pc, state: "connected", action_required: null };
     await page.waitForFunction(() => localStorage.getItem("herdr-web-ui:pc-notice-dismissed") === null);

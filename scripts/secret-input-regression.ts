@@ -68,6 +68,11 @@ process.stdin.on("data", chunk => {
     await field.waitFor();
     await page.getByText("Loading conversation…", { exact: true }).waitFor({ state: "hidden" });
     assert.equal(await page.getByRole("textbox", { name: "Message", exact: true }).count(), 0);
+    await page.getByRole("button", { name: "Expand Chat", exact: true }).tap();
+    assert.equal(await field.isVisible(), true, "expanding chat keeps masked input visible");
+    await page.locator(".secret-input").getByRole("button", { name: "Send", exact: true }).click({ trial: true });
+    await page.getByRole("button", { name: "Collapse Chat", exact: true }).tap();
+    assert.equal(await field.isVisible(), true);
     if (process.env.UI_EVIDENCE_DIR) {
       mkdirSync(process.env.UI_EVIDENCE_DIR, { recursive: true });
       await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "secret-input-mobile.png") });

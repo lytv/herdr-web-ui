@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Browser } from "playwright-core";
-import { herdrRpc, tabCreate, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
+import { herdrRpc, sessionSnapshot, tabCreate, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 
 /**
  * The slide bar is the phone's session switch: one pill per workspace with herdr's
@@ -22,12 +22,16 @@ export async function checkMobileSlide(browser: Browser, origin: string): Promis
     const two = join(root, "two");
     mkdirSync(one);
     mkdirSync(two);
-    const first = await workspaceCreate({ cwd: one, label: "slide-one" });
+    const focused = (await sessionSnapshot()).focused_pane_id;
+    const first = await workspaceCreate({ cwd: one, label: "herdr-web-ui-test-slide-one", focus: false });
     workspaces.push(first.workspace.workspace_id);
+    assert.equal((await sessionSnapshot()).focused_pane_id, focused);
     // a second tab in the workspace: still one pill for it
     await tabCreate({ workspaceId: first.workspace.workspace_id, cwd: one, label: "second-tab" });
-    const second = await workspaceCreate({ cwd: two, label: "slide-two" });
+    const tabFocus = (await sessionSnapshot()).focused_pane_id;
+    const second = await workspaceCreate({ cwd: two, label: "herdr-web-ui-test-slide-two", focus: false });
     workspaces.push(second.workspace.workspace_id);
+    assert.equal((await sessionSnapshot()).focused_pane_id, tabFocus);
     await herdrRpc("pane.report_agent", { pane_id: second.root_pane.pane_id, source: "manual", agent: "claude", state: "working" });
 
     const page = await context.newPage();
@@ -39,18 +43,18 @@ export async function checkMobileSlide(browser: Browser, origin: string): Promis
     await page.goto(`${origin}/?pane=${encodeURIComponent(first.root_pane.pane_id)}`);
     await page.locator(".conn-live").waitFor();
     const bar = page.locator(".slide-bar");
-    await bar.getByRole("tab", { name: "slide-one" }).waitFor();
+    await bar.getByRole("tab", { name: "herdr-web-ui-test-slide-one" }).waitFor();
     // the lane shares its herdr session with other checks' workspaces: count only this check's
-    assert.equal(await bar.getByRole("tab", { name: /slide-(one|two)/ }).count(), 2, "one pill per workspace, not per tab");
-    assert.equal(await bar.getByRole("tab", { name: "slide-one" }).getAttribute("aria-selected"), "true", "the open session's pill is selected");
-    assert.equal(await bar.getByRole("tab", { name: "slide-two" }).getAttribute("aria-selected"), "false", "the other pill is not");
-    const dot = bar.getByRole("tab", { name: "slide-two" }).locator('.tab-strip-dot[data-status="working"]');
+    assert.equal(await bar.getByRole("tab", { name: /herdr-web-ui-test-slide-(one|two)/ }).count(), 2, "one pill per workspace, not per tab");
+    assert.equal(await bar.getByRole("tab", { name: "herdr-web-ui-test-slide-one" }).getAttribute("aria-selected"), "true", "the open session's pill is selected");
+    assert.equal(await bar.getByRole("tab", { name: "herdr-web-ui-test-slide-two" }).getAttribute("aria-selected"), "false", "the other pill is not");
+    const dot = bar.getByRole("tab", { name: "herdr-web-ui-test-slide-two" }).locator('.tab-strip-dot[data-status="working"]');
     await dot.waitFor({ timeout: 15_000 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, "nothing overflows sideways");
     if (evidence) await page.screenshot({ path: join(evidence, "mobile-slide-bar.png"), animations: "disabled" });
 
-    await bar.getByRole("tab", { name: "slide-two" }).tap();
-    await page.waitForFunction(() => document.querySelector('.slide-bar [role="tab"][aria-selected="true"]')?.textContent?.includes("slide-two") === true);
+    await bar.getByRole("tab", { name: "herdr-web-ui-test-slide-two" }).tap();
+    await page.waitForFunction(() => document.querySelector('.slide-bar [role="tab"][aria-selected="true"]')?.textContent?.includes("herdr-web-ui-test-slide-two") === true);
     assert.ok((await page.locator(".mobile-title-text").innerText()).length > 0, "the top bar follows the switched session");
 
     await bar.getByRole("button", { name: "New workspace", exact: true }).tap();

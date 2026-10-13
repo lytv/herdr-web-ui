@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Ellipsis } from "lucide-react";
 
 import "./MobileChrome.css";
@@ -7,13 +7,12 @@ import type { SessionSnapshot } from "../../shared/protocol.ts";
 import type { Machine } from "../../shared/machines.ts";
 import type { HeaderCrumb } from "../lib/headerCrumb.ts";
 import type { UpdatesModel } from "../lib/updates.ts";
-import { readDismissed, waitingMachines } from "../lib/machineNotice.ts";
 import { useT } from "../lib/i18n.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { SlideBar } from "./SlideBar.tsx";
 import { RowMenu, type RowMenuItem } from "./RowMenu.tsx";
-import { MachineActionBanner } from "./MachineSidebar.tsx";
-import { UpdateNotice } from "./UpdateControls.tsx";
+import { useMachineActionBanner } from "./MachineSidebar.tsx";
+import { useUpdateNotice } from "./UpdateControls.tsx";
 
 export interface MobileChromeProps {
   machines: Machine[];
@@ -23,6 +22,7 @@ export interface MobileChromeProps {
   connText: string;
   connTitle?: string;
   connected: boolean;
+  herdrOnline: boolean;
   title: string;
   crumb: HeaderCrumb | null;
   agent: string | null;
@@ -48,28 +48,18 @@ export interface MobileChromeProps {
 export function MobileChrome(props: MobileChromeProps) {
   const t = useT();
   const [menu, setMenu] = useState<HTMLElement | null>(null);
-  const notices = (
-    <div className="mobile-notices">
-      <UpdateNotice updates={props.updates} onOpen={() => { setMenu(null); props.onOpenUpdates(); }} />
-      <MachineActionBanner machines={props.machines} onSetup={(machine, update) => { setMenu(null); props.onSetupMachine(machine, update); }} />
-    </div>
-  );
-  // a notice worth a glance while the sheet stays closed: a release, a reload, an
-  // install on its way, or a PC waiting on the user. Dismissed lines stay dismissed.
-  const hasNotices = useMemo(() => {
-    if (props.updates.status?.available || props.updates.needsReload || props.updates.busy) return true;
-    if (props.machines.some((machine) => machine.updating)) return true;
-    return waitingMachines(props.machines, readDismissed()).length > 0;
-  }, [props.updates, props.machines]);
-  const dot = hasNotices || props.alertsDot;
+  const updateNotice = useUpdateNotice({ updates: props.updates, onOpen: () => { setMenu(null); props.onOpenUpdates(); } });
+  const machineNotice = useMachineActionBanner({ machines: props.machines, onSetup: (machine, update) => { setMenu(null); props.onSetupMachine(machine, update); } });
+  const notices = <div className="mobile-notices">{updateNotice}{machineNotice}</div>;
+  const dot = updateNotice !== null || machineNotice !== null || props.alertsDot;
   return (
     <div className="mobile-chrome">
       <header className="mobile-topbar">
         {/* the header's own chip: below 900px it keeps only its dot, and live it stays in the
             document clipped (never display: none), which is what the browser scripts wait on */}
-        <span className={`conn${props.connected ? " conn-live" : " conn-reconnecting"}`} role="status" title={props.connTitle}>
+        <span className={`conn${props.connected && props.herdrOnline ? " conn-live" : " conn-reconnecting"}`} role="status" title={props.herdrOnline ? props.connTitle : t("herdr offline")}>
           <span className="conn-dot" aria-hidden="true" />
-          <span className="conn-text">{props.connText}</span>
+          <span className="conn-text">{props.herdrOnline ? props.connText : t("herdr offline")}</span>
         </span>
         <div className="mobile-title" title={props.crumb?.tooltip}>
           {props.agent && <AgentMark agent={props.agent} size={16} />}
@@ -83,7 +73,10 @@ export function MobileChrome(props: MobileChromeProps) {
           title={props.alertsDot ? t("More · alerts are off") : t("More")}
           aria-haspopup="menu"
           aria-expanded={menu !== null}
-          onClick={(event) => setMenu((open) => (open ? null : event.currentTarget))}
+          onClick={(event) => {
+            const anchor = event.currentTarget;
+            setMenu((open) => (open ? null : anchor));
+          }}
         >
           <Ellipsis />
         </button>

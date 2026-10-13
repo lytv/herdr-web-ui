@@ -785,7 +785,7 @@ export function App() {
 
   return (
     <MachineContext.Provider value={selectedMachineId}><div className={`app${sidebarCollapsed ? " sidebar-collapsed" : ""}`} style={sidebarWidth === null ? undefined : { "--sidebar-user-w": `${sidebarWidth}px` } as CSSProperties}>
-      {mobile && snapshot && selectedPane && selectedWorkspace && selectedTitle !== null ? (
+      {isMobileShell ? (
         <MobileChrome
           machines={machines}
           snapshot={snapshot}
@@ -793,6 +793,7 @@ export function App() {
           connText={connWord}
           connTitle={connTitle}
           connected={connected}
+          herdrOnline={!!targetHerdr}
           title={selectedTitle}
           crumb={crumb}
           agent={selectedAgent}

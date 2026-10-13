@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Browser } from "playwright-core";
-import { workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
+import { sessionSnapshot, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import type { UpdateStatus } from "../shared/update.ts";
 
 /**
@@ -34,10 +34,12 @@ export async function checkMobileShell(browser: Browser, origin: string): Promis
     const two = join(root, "two");
     mkdirSync(one);
     mkdirSync(two);
-    const first = await workspaceCreate({ cwd: one, label: "mobile-shell-one" });
+    const focused = (await sessionSnapshot()).focused_pane_id;
+    const first = await workspaceCreate({ cwd: one, label: "herdr-web-ui-test-mobile-shell-one", focus: false });
     workspaces.push(first.workspace.workspace_id);
-    const second = await workspaceCreate({ cwd: two, label: "mobile-shell-two" });
+    const second = await workspaceCreate({ cwd: two, label: "herdr-web-ui-test-mobile-shell-two", focus: false });
     workspaces.push(second.workspace.workspace_id);
+    assert.equal((await sessionSnapshot()).focused_pane_id, focused, "fixture workspaces leave herdr focus unchanged");
     const page = await context.newPage();
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
@@ -61,13 +63,13 @@ export async function checkMobileShell(browser: Browser, origin: string): Promis
 
     // one slide bar: a pill per session with its status, the open one selected, + new at the end
     const bar = page.locator(".slide-bar");
-    await bar.getByRole("tab", { name: "mobile-shell-one" }).waitFor();
-    assert.equal(await bar.getByRole("tab", { name: "mobile-shell-one" }).getAttribute("aria-selected"), "true", "the open session's pill is selected");
+    await bar.getByRole("tab", { name: "herdr-web-ui-test-mobile-shell-one" }).waitFor();
+    assert.equal(await bar.getByRole("tab", { name: "herdr-web-ui-test-mobile-shell-one" }).getAttribute("aria-selected"), "true", "the open session's pill is selected");
     assert.equal(await bar.getByRole("button", { name: "New workspace", exact: true }).count(), 1, "a new session starts at the bar's end");
-    await bar.getByRole("tab", { name: "mobile-shell-two" }).tap();
-    await bar.getByRole("tab", { name: "mobile-shell-two" }).waitFor();
-    assert.equal(await bar.getByRole("tab", { name: "mobile-shell-two" }).getAttribute("aria-selected"), "true", "tapping a pill switches the session");
-    assert.equal(await bar.getByRole("tab", { name: "mobile-shell-one" }).getAttribute("aria-selected"), "false", "the old pill deselects");
+    await bar.getByRole("tab", { name: "herdr-web-ui-test-mobile-shell-two" }).tap();
+    await bar.getByRole("tab", { name: "herdr-web-ui-test-mobile-shell-two" }).waitFor();
+    assert.equal(await bar.getByRole("tab", { name: "herdr-web-ui-test-mobile-shell-two" }).getAttribute("aria-selected"), "true", "tapping a pill switches the session");
+    assert.equal(await bar.getByRole("tab", { name: "herdr-web-ui-test-mobile-shell-one" }).getAttribute("aria-selected"), "false", "the old pill deselects");
     await screenshot("slide-switch");
 
     // two boxes: messages over terminal, each alive at once
@@ -135,6 +137,33 @@ export async function checkMobileShell(browser: Browser, origin: string): Promis
     await page.evaluate(() => { (document.activeElement as HTMLElement | null)?.blur(); (window as unknown as { keyboardQA: (value: number | null) => void }).keyboardQA(null); });
     await page.waitForFunction(() => !document.documentElement.hasAttribute("data-keyboard"));
 
+    await page.route("**/api/health*", async (route) => {
+      const body = await (await route.fetch()).json();
+      await route.fulfill({ json: { ...body, herdr: null } });
+    });
+    await page.routeWebSocket(/\/ws(?:\?|$)/, (socket) => {
+      const upstream = socket.connectToServer();
+      upstream.onMessage((raw) => {
+        socket.send(raw);
+        const frame = JSON.parse(String(raw));
+        if (frame.type === "input-ready") socket.send(JSON.stringify({ type: "error", code: "attach_held", pane_id: second.root_pane.pane_id, message: "held fixture" }));
+      });
+    });
+    await page.goto(`${origin}/?pane=${encodeURIComponent(second.root_pane.pane_id)}`);
+    await page.getByText("herdr offline", { exact: true }).waitFor();
+    assert.equal(await page.locator(".mobile-topbar .conn").getAttribute("title"), "herdr offline");
+    assert.equal(await page.locator(".conn-live").count(), 0, "a live bridge never claims an offline herdr is live");
+    const held = page.getByText("Another app has this pane open. It connects here as soon as that app lets go.", { exact: true });
+    await held.waitFor();
+    const bannerBox = (await page.locator(".terminal-banners").boundingBox())!;
+    const headBox = (await page.locator(".terminal-surface > .split-head").boundingBox())!;
+    assert.ok(bannerBox.y >= headBox.y + headBox.height, "the held banner sits below the terminal box controls");
+    await page.getByRole("button", { name: "Expand Chat", exact: true }).tap();
+    assert.equal(await held.isVisible(), true, "expanding chat keeps the held-state explanation visible");
+    assert.equal(await page.getByRole("button", { name: "Open here", exact: true }).isVisible(), true, "the held-pane action stays reachable in expanded chat");
+    await screenshot("held-expanded-chat");
+    await page.getByRole("button", { name: "Collapse Chat", exact: true }).tap();
+    assert.equal(await held.isVisible(), true);
     assert.deepEqual(errors, []);
     console.log("PASS a phone shows top bar, slide bar and two live boxes with expand, sheet and keyboard resize");
   } finally {
@@ -174,7 +203,7 @@ if (import.meta.main) {
   const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? "/opt/google/chrome/chrome", headless: true, args: ["--no-sandbox"] });
   let standalone: string | null = null;
   try {
-    const created = await create({ cwd: mkdtempSync(join(tmpdir(), "herdr-web-ui-mobile-shell-ws-")), label: "mobile-shell-standalone" });
+    const created = await create({ cwd: mkdtempSync(join(tmpdir(), "herdr-web-ui-mobile-shell-ws-")), label: "herdr-web-ui-test-mobile-shell-standalone", focus: false });
     standalone = created.workspace.workspace_id;
     await checkMobileShell(browser, `http://127.0.0.1:${server.port}`);
     await checkMobileShellDesktop(browser, `http://127.0.0.1:${server.port}`, created.root_pane.pane_id);
