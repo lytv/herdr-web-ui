@@ -486,8 +486,7 @@ export function PaneTerminal({
         dragWheel(event);
         return false;
       }
-      // an adopted grid sends herdr nothing: the wheel is the browser's, and pans the mount
-      if (adopted()) return false;
+      if (observeRef.current || fixedGridRef.current) return false;
       if (term.hasSelection()) term.clearSelection();
       const reporting = term.modes.mouseTrackingMode !== "none";
       // a trackpad pinch arrives as a wheel with Ctrl down: it is not scrolling, and goes once as before
@@ -1106,8 +1105,6 @@ export function PaneTerminal({
     // The text follows the finger, as everywhere on a phone: dragging down brings
     // older lines in. Each event carries the finger's position, since xterm reports
     // a wheel at the cell under it (without one, every report said row 1, column 1).
-    // An adopted grid has no history to send a wheel to (an observer's reports are dropped, a
-    // mirror reports nothing): there the drag pans the mount, both ways, to the cells past its edge.
     let touchX = 0;
     let touchY = 0;
     let tracking = false;
@@ -1129,12 +1126,14 @@ export function PaneTerminal({
       const across = touchX - first.clientX;
       touchX = first.clientX;
       touchY = first.clientY;
-      if (adopted()) {
+      const panX = adopted() && host.scrollWidth > host.clientWidth;
+      const panY = adopted() && host.scrollHeight > host.clientHeight;
+      if (panX || panY) {
         panned = true;
-        host.scrollBy(across, delta);
-        return;
+        host.scrollBy(panX ? across : 0, panY ? delta : 0);
       }
-      if (delta !== 0) {
+      if (observeRef.current || fixedGridRef.current) return;
+      if (!panY && delta !== 0) {
         const target = term.element ?? host;
         target.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: delta, clientX: first.clientX, clientY: first.clientY }));
       }
