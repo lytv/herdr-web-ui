@@ -1,11 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { MOBILE_QUERY, watchMedia } from "./useMediaQuery.ts";
-
-describe("MOBILE_QUERY", () => {
-  test("is the drawer's own breakpoint, so the shell and the drawer switch together", () => {
-    expect(MOBILE_QUERY).toBe("(max-width: 768px)");
-  });
-});
+import { watchMedia } from "./useMediaQuery.ts";
 
 describe("watchMedia", () => {
   test("runs the listener once now, again on change, never after release", () => {

@@ -59,17 +59,24 @@ export async function checkUpdateNotice(browser: Browser, origin: string, shots?
     // on a phone the notices hold no rows: an update on offer dots the ⋯ menu, and its
     // line lives at the top of the sheet it opens
     const sheet = page.locator(".row-sheet");
+    const menuNamed = async (name: string): Promise<void> => {
+      const button = page.getByRole("button", { name, exact: true });
+      await button.waitFor();
+      assert.equal(await button.getAttribute("title"), name);
+    };
     const openSheet = async (): Promise<void> => {
       if ((await sheet.count()) === 0) await page.locator(".mobile-topbar .header-more-button").click();
       await sheet.waitFor();
     };
     await page.locator(".conn-live").waitFor();
+    await menuNamed("More");
     await openSheet();
     assert.equal(await page.locator(".mobile-notices .update-notice").count(), 0, "background checking renders no notice");
     assert.equal(await page.locator(".mobile-menu-dot").count(), 0, "background checking shows no notice dot");
     await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
     status = { ...status, phase: "idle", current_revision: revision, latest_revision: revision, current_version: "9.9.8", latest_version: "9.9.8" };
     await page.locator(".mobile-menu-dot").waitFor();
+    await menuNamed("More · notices");
     await openSheet();
     await page.getByText("herdr web ui was updated to v9.9.8.", { exact: true }).waitFor();
     await page.getByRole("button", { name: "What's new", exact: true }).click();
@@ -82,6 +89,7 @@ export async function checkUpdateNotice(browser: Browser, origin: string, shots?
     await page.locator(".mobile-menu-dot").waitFor();
     assert.equal(await page.locator(".pane-column > .update-notice").count(), 0, "no notice holds a row on a phone");
     assert.equal(await page.locator(".mobile-menu-dot").count(), 1, "an update on offer dots the menu");
+    await menuNamed("More · notices");
 
     // one button, and no detour through Settings
     await openSheet();
@@ -123,6 +131,7 @@ export async function checkUpdateNotice(browser: Browser, origin: string, shots?
     await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
     await sheet.waitFor({ state: "detached" });
     assert.equal(await page.locator(".mobile-menu-dot").count(), 1, "a failed install with no available release still dots the closed menu");
+    await menuNamed("More · notices");
     await openSheet();
     await page.getByRole("button", { name: "Try again", exact: true }).waitFor();
     // the server refuses an install with nothing available: Try again looks for the release again
@@ -132,6 +141,7 @@ export async function checkUpdateNotice(browser: Browser, origin: string, shots?
     status = { ...status, phase: "idle", available: false, error: null };
     await page.getByText("herdr web ui v9.9.9 is available.", { exact: true }).waitFor({ state: "hidden" });
     assert.equal(await page.locator(".mobile-menu-dot").count(), 0, "an installed update leaves no dot");
+    await menuNamed("More");
     console.log("PASS a release installs from its sheet line with one button and shows its steps");
 
     // a PC whose bridge cannot be updated: its line closes, and stays closed
@@ -140,12 +150,14 @@ export async function checkUpdateNotice(browser: Browser, origin: string, shots?
     remote = pc;
     await openSheet();
     await line.waitFor();
+    await menuNamed("More · notices");
     await fits("bridge update needed");
     await shot("4-bridge-update-needed");
     await page.locator(".update-notice").getByRole("button", { name: "Dismiss", exact: true }).click();
     await line.waitFor({ state: "hidden" });
     assert.equal(await dismissed(), JSON.stringify(["qa-pc:update_bridge"]));
     assert.equal(await page.locator(".mobile-menu-dot").count(), 0, "dismissing the PC line removes the dot without a roster change");
+    await menuNamed("More");
     // a retry that fails brings the PC back to the same state: still closed, also after a reload
     remote = { ...pc, state: "reconnecting", action_required: null };
     await page.reload();
@@ -164,6 +176,18 @@ export async function checkUpdateNotice(browser: Browser, origin: string, shots?
     remote = pc;
     await openSheet();
     await line.waitFor();
+    await page.evaluate(() => {
+      const key = "herdr-web-ui:settings";
+      localStorage.setItem(key, JSON.stringify({ ...JSON.parse(localStorage.getItem(key) ?? "{}"), alertsOn: false }));
+    });
+    await page.reload();
+    await page.locator(".conn-live").waitFor();
+    await menuNamed("More · notices · alerts are off");
+    await openSheet();
+    await line.waitFor();
+    await page.locator(".update-notice").getByRole("button", { name: "Dismiss", exact: true }).click();
+    await line.waitFor({ state: "hidden" });
+    await menuNamed("More · alerts are off");
     assert.deepEqual(errors, []);
     console.log("PASS the line for a PC that needs a bridge update closes and stays closed until the PC connects");
   } finally {

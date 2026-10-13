@@ -51,7 +51,11 @@ export function MobileChrome(props: MobileChromeProps) {
   const updateNotice = useUpdateNotice({ updates: props.updates, onOpen: () => { setMenu(null); props.onOpenUpdates(); } });
   const machineNotice = useMachineActionBanner({ machines: props.machines, onSetup: (machine, update) => { setMenu(null); props.onSetupMachine(machine, update); } });
   const notices = <div className="mobile-notices">{updateNotice}{machineNotice}</div>;
-  const dot = updateNotice !== null || machineNotice !== null || props.alertsDot;
+  const hasNotices = updateNotice !== null || machineNotice !== null;
+  const dot = hasNotices || props.alertsDot;
+  const menuLabel = hasNotices
+    ? props.alertsDot ? t("More · notices · alerts are off") : t("More · notices")
+    : props.alertsDot ? t("More · alerts are off") : t("More");
   return (
     <div className="mobile-chrome">
       <header className="mobile-topbar">
@@ -69,8 +73,8 @@ export function MobileChrome(props: MobileChromeProps) {
         <button
           type="button"
           className="icon-button mobile-menu-button header-more-button"
-          aria-label={props.alertsDot ? t("More · alerts are off") : t("More")}
-          title={props.alertsDot ? t("More · alerts are off") : t("More")}
+          aria-label={menuLabel}
+          title={menuLabel}
           aria-haspopup="menu"
           aria-expanded={menu !== null}
           onClick={(event) => {

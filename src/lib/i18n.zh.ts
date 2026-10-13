@@ -139,6 +139,8 @@ export const ZH: Record<string, string> = {
   "Off on this device": "此设备已关闭",
   "More": "更多",
   "More · alerts are off": "更多 · 提醒已关闭",
+  "More · notices": "更多 · 通知消息",
+  "More · notices · alerts are off": "更多 · 通知消息 · 提醒已关闭",
   "Alerts off on this device — tap to turn them on": "此设备上的提醒已关闭。点按可开启",
   "On in this tab": "在此标签页开启",
   "Alerts on while this tab is open. Tap to turn them off": "此标签页打开期间会收到提醒。点按可关闭",

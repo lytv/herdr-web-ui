@@ -37,17 +37,50 @@ describe("slideSessions", () => {
     expect(slideSessions(null, null)).toEqual([]);
   });
 
-  test("a tap opens the selected pane, else herdr's focused one, else the first", () => {
+  test("the selected pane overrides focus and preserves workspace order", () => {
     const first = workspace({ workspace_id: "a" });
     const second = workspace({ workspace_id: "b" });
     const panes = [pane({ pane_id: "p1", workspace_id: "a", agent_status: "working" }), pane({ pane_id: "p2", workspace_id: "a", focused: true }), pane({ pane_id: "p3", workspace_id: "b", agent_status: "done" })];
-    const pills = slideSessions(snapshot([first, second], panes), "p1");
+    const state = snapshot([first, second], panes);
+    state.layouts[0]!.focused_pane_id = "p2";
+    const pills = slideSessions(state, "p1");
     expect(pills.map((pill) => [pill.workspace.workspace_id, pill.paneId, pill.status, pill.selected])).toEqual([
       ["a", "p1", "working", true],
       ["b", "p3", "done", false],
     ]);
-    const unfocused = slideSessions(snapshot([first], [pane({ pane_id: "p1", workspace_id: "a" }), pane({ pane_id: "p2", workspace_id: "a" })]), "elsewhere");
-    expect(unfocused[0]?.paneId).toBe("p1");
+  });
+
+  test("active-tab layout focus overrides pane focus and the first pane", () => {
+    const state = snapshot([workspace({ workspace_id: "a" })], [
+      pane({ pane_id: "p1", workspace_id: "a", focused: true }),
+      pane({ pane_id: "p2", workspace_id: "a" }),
+    ]);
+    state.layouts[0]!.focused_pane_id = "p2";
+    expect(slideSessions(state, "elsewhere")[0]?.paneId).toBe("p2");
+  });
+
+  test("pane focus selects a non-first pane when no layout applies", () => {
+    const state = snapshot([workspace({ workspace_id: "a" })], [
+      pane({ pane_id: "p1", workspace_id: "a" }),
+      pane({ pane_id: "p2", workspace_id: "a", focused: true }),
+    ]);
+    state.layouts = [];
+    expect(slideSessions(state, "elsewhere")[0]?.paneId).toBe("p2");
+  });
+
+  test("without selection or focus the first pane decides", () => {
+    const state = snapshot([workspace({ workspace_id: "a" })], [
+      pane({ pane_id: "p1", workspace_id: "a" }),
+      pane({ pane_id: "p2", workspace_id: "a" }),
+    ]);
+    state.layouts = [];
+    expect(slideSessions(state, "elsewhere")[0]?.paneId).toBe("p1");
+  });
+
+  test("an empty workspace has no pane to open", () => {
+    const [pill] = slideSessions(snapshot([workspace({ workspace_id: "a" })], []), "elsewhere");
+    expect(pill?.paneId).toBeNull();
+    expect(pill?.selected).toBe(false);
   });
 
   test("a workspace's pill rolls its panes up as the sidebar does", () => {
