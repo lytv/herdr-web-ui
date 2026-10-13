@@ -64,7 +64,7 @@ process.stdin.on("data", chunk => {
     assert.equal(await field.evaluate((element) => element.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true, cancelable: true }))), false);
     assert.equal(await page.locator("body").innerText().then((text) => text.includes("fixture-secret")), false);
     assert.equal(await page.evaluate(() => JSON.stringify({ ...localStorage }).includes("fixture-secret")), false);
-    await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+    // the split shows both boxes at once: the secret stays masked while the chat loads beside it
     await field.waitFor();
     await page.getByText("Loading conversation…", { exact: true }).waitFor({ state: "hidden" });
     assert.equal(await page.getByRole("textbox", { name: "Message", exact: true }).count(), 0);
@@ -102,7 +102,7 @@ process.stdin.on("data", chunk => {
     assert.deepEqual(sent, ["secret", "secret"]);
     await paneSendText(pane, "\u0010");
     await field.waitFor();
-    await page.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click();
+    // the terminal box is already live in the split: widening to the desktop keeps the secret
     await page.setViewportSize({ width: 1280, height: 800 });
     if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "secret-input-desktop.png") });
     await field.fill("discarded-secret");
@@ -110,7 +110,7 @@ process.stdin.on("data", chunk => {
     await field.waitFor({ state: "detached" });
     assert.deepEqual(sent, ["secret", "secret", "input"]);
     assert.deepEqual(errors, []);
-    console.log("PASS masked secret input: both lenses, no drafts/queue/echo, disconnect, background and cancel");
+    console.log("PASS masked secret input: split and desktop, no drafts/queue/echo, disconnect, background and cancel");
   } finally { await context.close(); await workspaceClose(created.workspace.workspace_id); rmSync(root, { recursive: true, force: true }); }
 }
 

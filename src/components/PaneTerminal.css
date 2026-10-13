@@ -297,3 +297,120 @@
 .terminal-stack.is-chat .pane-terminal {
   content-visibility: hidden;
 }
+
+/* ---------- the phone's two boxes (MobileShell.tsx, split mode) ---------- */
+
+/* The stack is the content area: the message box over the terminal box, each with its
+   head. One box's Expand covers the area (data-full); the other hides but stays mounted,
+   so the xterm grid and the transcript keep their state. Only one expands at a time. */
+.terminal-stack.is-split {
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  background: var(--bg);
+}
+
+.split-box {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-panel);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.split-msg {
+  flex: 1 1 44%;
+}
+
+/* one box expanded covers the content area; the other hides but stays mounted, so the
+   xterm grid and the transcript keep their state. The terminal's pieces hide one by one:
+   they are separate flex children, not one box. */
+.terminal-stack.is-split[data-full="chat"] .terminal-surface,
+.terminal-stack.is-split[data-full="chat"] .terminal-input,
+.terminal-stack.is-split[data-full="chat"] .key-bar,
+.terminal-stack.is-split[data-full="chat"] .secret-input {
+  display: none;
+}
+
+.terminal-stack.is-split[data-full="term"] .split-msg {
+  display: none;
+}
+
+.terminal-stack.is-split[data-full="chat"] .split-msg {
+  flex: 1 1 auto;
+}
+
+.terminal-stack.is-split[data-full="term"] .terminal-surface {
+  flex: 1 1 auto;
+}
+
+.split-head {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h);
+  padding: 0 var(--space-1) 0 var(--space-3);
+  background: var(--bg-elevated);
+  border-bottom: var(--hairline) solid var(--border);
+}
+
+.split-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.split-expand {
+  flex: 0 0 auto;
+  min-height: var(--control-h);
+  padding: 0 var(--space-2);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .split-expand:hover {
+    color: var(--accent);
+  }
+}
+
+.split-msg-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* the terminal box is the surface itself: its head reads as the box's head, the grid fills it */
+.terminal-stack.is-split .terminal-surface {
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+/* in its own box the transcript is a flex child that scrolls, not an overlay */
+.terminal-stack.is-split .chat-view {
+  position: static;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* the key bar belongs to the terminal box alone: it never renders under messages */
+.split-msg .key-bar {
+  display: none;
+}

@@ -1,0 +1,96 @@
+/*
+ * The phone's chrome (MobileChrome.tsx): one slim top bar over one slide bar. Rendered
+ * only below 769px (App.tsx); the desktop header is untouched. The split pane mounts
+ * below this chrome in the shared host, which never unmounts across the breakpoint.
+ * The chrome fills no room of its own: it is content-sized, and the pane column below
+ * takes the rest.
+ */
+
+.mobile-chrome {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg);
+}
+
+/* one row: connection dot, session title plus one-line crumb, menu button */
+.mobile-topbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--header-h);
+  padding: var(--space-1) var(--space-3);
+  padding-top: max(var(--space-1), env(safe-area-inset-top, 0px));
+  background: var(--bg-panel);
+  border-bottom: var(--hairline) solid var(--border);
+}
+
+.mobile-title {
+  display: flex;
+  flex: 1 1 auto;
+  flex-flow: row wrap;
+  align-items: baseline;
+  column-gap: var(--space-2);
+  min-width: 0;
+}
+
+.mobile-title-text {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  color: var(--text-strong);
+}
+
+.mobile-crumb {
+  flex: 1 1 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+.mobile-menu-button {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+/* a notice in the sheet, or alerts off here: worth a glance before opening it */
+.mobile-menu-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  margin-left: calc(-1 * var(--space-2));
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+
+/* the split pane owns the pane column below this chrome */
+
+/* update and machine notices hold no rows on a phone: they open the sheet instead */
+.mobile-notices:empty {
+  display: none;
+}
+
+.mobile-notices .update-notice {
+  margin: var(--space-2) 0;
+}
+
+.mobile-menu-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+
+.mobile-menu-path {
+  overflow-wrap: anywhere;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}

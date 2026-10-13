@@ -30,7 +30,7 @@ export async function checkMobileViewport(browser: Browser, origin: string, pane
     page.on("pageerror", (error) => errors.push(error.message));
     await page.goto(`${origin}/?pane=${encodeURIComponent(paneId)}`);
     await page.locator(".conn-live").waitFor();
-    await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+    // the split shows both boxes at once: the composer and the terminal need no lens switch
     const composer = page.getByRole("textbox", { name: "Message", exact: true });
     await composer.waitFor();
     assert.equal(await page.locator(".chat-view").evaluate((node) => getComputedStyle(node).overscrollBehaviorY), "contain",
@@ -104,7 +104,6 @@ export async function checkMobileViewport(browser: Browser, origin: string, pane
     await page.setViewportSize({ width: 390, height: 844 });
     await height(500);
 
-    await page.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click();
     const terminal = page.locator(".xterm-helper-textarea");
     await terminal.focus();
     await shell(false, "", 844);
@@ -123,7 +122,6 @@ export async function checkMobileViewport(browser: Browser, origin: string, pane
     await blur();
     await shell(false, "", 844);
 
-    await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
     await composer.focus();
     await shell(true, "500px", 500);
     // Switching to a hardware pointer must clear sizing even when the text field keeps focus.
@@ -138,8 +136,8 @@ export async function checkMobileViewport(browser: Browser, origin: string, pane
 
     // A sheet with a text field ends where the keyboard begins: an iPhone home screen app keeps
     // the layout viewport at full height, so a sheet on its bottom edge would sit under the keyboard.
-    // at phone width the palette's header button is gone: it is the More menu's first item
-    assert.equal(await page.locator(".app-header .palette-button").isVisible(), false, "a phone's header has no palette button");
+    // at phone width the palette's header button is gone: it is the ⋯ sheet's first item
+    assert.equal(await page.locator(".mobile-topbar .palette-button").count(), 0, "a phone's top bar has no palette button");
     const palette = await moreItem(page, "Command palette");
     assert.equal(await page.locator(".row-sheet-item").first().textContent(), "Command palette", "the palette is the More menu's first item");
     await palette.click();

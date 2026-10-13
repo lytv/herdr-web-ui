@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { Fragment, useCallback, useContext, useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -61,6 +61,12 @@ export interface PaneTerminalProps {
   machineName?: string;
   /** the lens over the pane: the chat transcript, or the live xterm grid (App remembers it per pane) */
   view: PaneView;
+  /**
+   * the phone's two boxes: the chat tree and the live grid render at once, each in its own
+   * box, instead of the exclusive lens switch. The remembered lens is then display only;
+   * the socket, the focus and the refit behave as the terminal, which stays visible.
+   */
+  split?: boolean;
   /** App selected this pane itself (the selected one closed): switching to it must not take the keyboard */
   autoSelected?: boolean;
   /** xterm font size (settings) */
@@ -113,6 +119,7 @@ export function PaneTerminal({
   cwd = null,
   machineName = "",
   view,
+  split = false,
   autoSelected = false,
   terminalFontSize,
   terminalWheelSpeed,
@@ -132,7 +139,11 @@ export function PaneTerminal({
   const { answerPanePrompt, uploadPaneImage } = useMachineApi();
   const uploadFileRef = useRef(uploadPaneImage);
   uploadFileRef.current = uploadPaneImage;
-  const chatView = view === "chat";
+  const chatLens = view === "chat";
+  // in the split the grid stays visible whatever the remembered lens: it owns the socket,
+  // the focus and the refit, while the chat tree draws in its own box too
+  const chatView = chatLens && !split;
+  const showChat = chatLens || split;
   const chatViewRef = useRef(chatView);
   chatViewRef.current = chatView;
   /** read by the wheel handler, which is attached once for the terminal's life */
@@ -147,6 +158,9 @@ export function PaneTerminal({
   const onConnectionChangeRef = useRef(onConnectionChange);
   const onServerMessageRef = useRef(onServerMessage);
   const onRoleAckRef = useRef(onRoleAck);
+  // the split's boxes: one tap expands a box over the content area, Back restores the split.
+  // One state is one expansion: expanding one box collapses the other by construction.
+  const [expanded, setExpanded] = useState<"chat" | "term" | null>(null);
   const [connected, setConnected] = useState(false);
   const pendingScopeRef = useRef<string | null>(null);
   /** counts this terminal's disconnects: an answer belongs to the connection that was up when its request left */
@@ -1476,14 +1490,14 @@ export function PaneTerminal({
   // a question in Codex's queue leaves the composer alone: Codex keeps working, and a
   // message ("stop, don't touch prod") must reach it, not become the answer; its card answers it
   // a fallback card is answered with its own buttons: what the user types still goes to the agent
-  const answering = chatView && chatPrompt !== null && chatPrompt.pane === paneId && !chatPrompt.value.queued && !chatPrompt.value.fallback ? chatPrompt.value : null;
+  const answering = showChat && chatPrompt !== null && chatPrompt.pane === paneId && !chatPrompt.value.queued && !chatPrompt.value.fallback ? chatPrompt.value : null;
   // ...and while it is open in the terminal it holds the input: nothing is sent into it
-  const heldByOpenQueue = chatView && chatPrompt !== null && chatPrompt.pane === paneId && chatPrompt.value.queued === "open";
+  const heldByOpenQueue = showChat && chatPrompt !== null && chatPrompt.pane === paneId && chatPrompt.value.queued === "open";
   const readyForQueue = agentStatus !== undefined && QUEUE_READY_STATUS[agentStatus] === true;
   // The held rows fold into their caption while a prompt card needs the room, or a phone's
   // window is short. They stay mounted; the caption is then the button that opens them
   const shortPhone = useMediaQuery(SHORT_PHONE_QUERY);
-  const heldFold = heldRowsFold({ promptOpen: chatView && chatPrompt !== null && chatPrompt.pane === paneId, shortPhone, ready: readyForQueue });
+  const heldFold = heldRowsFold({ promptOpen: showChat && chatPrompt !== null && chatPrompt.pane === paneId, shortPhone, ready: readyForQueue });
   const heldListRef = useRef<HTMLOListElement | null>(null);
   const heldToggleRef = useRef<HTMLButtonElement | null>(null);
   const [heldOpened, setHeldOpened] = useState(false);
@@ -1526,7 +1540,7 @@ export function PaneTerminal({
   });
   // an empty chat: one greeting line over the composer, which a mouse-driven window centres
   const folder = greetingFolder(cwd);
-  const greetingDue = chatView && paneId !== null && agent !== null && !secretActive && !observing && !ended
+  const greetingDue = showChat && paneId !== null && agent !== null && !secretActive && !observing && !ended
     && showsGreeting({ memory: greetingMemory(paneStorageId(machineId, paneId)), agentStatus, queued: queued.length + pending.length, folder });
   // a stack too short for the composer and the greeting keeps the chat's own empty line
   const greeted = greetingDue && greetingRoom;
@@ -1631,248 +1645,305 @@ export function PaneTerminal({
   // Capture the owner's pane for the entire upload batch, even across a pane switch.
   const uploadImage = useCallback((file: File) => uploadPaneImage(paneId ?? "", file), [paneId]);
 
+  // a box's head: its name, and the one tap that expands it over the split or collapses it back
+  const splitHead = (box: "chat" | "term") => {
+    const label = box === "chat" ? t("Chat") : t("Terminal");
+    return (
+      <div className="split-head">
+        <span className="split-title">{label}</span>
+        {expanded === null && (
+          <button type="button" className="split-expand" onClick={() => setExpanded(box)}>
+            {t("Expand {name}", { name: label })}
+          </button>
+        )}
+        {expanded === box && (
+          <button type="button" className="split-expand" onClick={() => setExpanded(null)}>
+            {t("Collapse {name}", { name: label })}
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  // The return below composes these once for the lens switch and once for the split's boxes,
+  // so neither tree is written twice. The keyed nodes keep their identity across the switch:
+  // the surface, and the xterm mount inside it, never unmount, so crossing the breakpoint keeps
+  // the terminal and its socket. The chat tree moves into the message box and redraws there.
+  const placeholders = (<Fragment key="placeholders">
+    {paneId === null && restoreError !== null && (
+      <div className="terminal-placeholder is-restore-error" role="status">
+        <div className="terminal-placeholder-inner">
+          <TriangleAlert aria-hidden="true" />
+          <span>{t("herdr could not restore this pane")}</span>
+          <span className="terminal-placeholder-detail">{restoreError}</span>
+        </div>
+      </div>
+    )}
+    {paneId === null && restoreError === null && (
+      <div className="terminal-placeholder">
+        <div className="terminal-placeholder-inner">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="2.5" y="4" width="19" height="16" rx="2.5" />
+            <path d="M7 9l3 3-3 3" />
+            <path d="M12.5 15h4.5" />
+          </svg>
+          <span>{t("Select a pane to open its terminal")}</span>
+        </div>
+      </div>
+    )}
+  </Fragment>);
+  const banners = (
+    <div key="banners" className="terminal-banners">
+      {paneId !== null && held && (
+        <div className="terminal-banner terminal-banner-warning" role="status">
+          <span>{t("Another app has this pane open. It connects here as soon as that app lets go.")}</span>
+          {!observing && socketRef.current?.canTakeOver() && (
+            <button type="button" className="btn terminal-banner-action" title={t("Take this pane from another web app or terminal attach. That connection will close.")} onClick={() => { if (paneId !== null) socketRef.current?.takeOver(paneId); }}>{t("Open here")}</button>
+          )}
+        </div>
+      )}
+      {paneId !== null && !chatView && unsupported && (
+        <div className="terminal-banner terminal-banner-soon" role="status">
+          <span>{t("Live terminal is coming to Windows PCs: herdr cannot attach a terminal there yet. The chat lens works now.")}</span>
+        </div>
+      )}
+      {paneId !== null && outputError && (
+        <div className="terminal-banner terminal-banner-warning terminal-banner-output-error" role="status">
+          <span>{outputError}</span>
+          <a className="btn" href={`?machine=${encodeURIComponent(machineId)}&pane=${encodeURIComponent(paneId)}`}>{t("Reconnect")}</a>
+        </div>
+      )}
+      {!chatView && inputError && <div className="terminal-banner" role="status">{inputError}<button type="button" className="btn terminal-banner-action" onClick={() => setInputError(null)}>{t("Dismiss")}</button></div>}
+      {!chatView && !observing && connected && !inputReady && !held && !ended && <div className="terminal-banner" role="status">{t("Waiting for terminal input…")}</div>}
+      {/* the chat lens says these itself (ChatView), inline; the pills are the grid's */}
+      {paneId !== null && !chatView && ended && !outputError && (
+        <div className="terminal-banner" role="status">
+          terminal ended{!draftIsEmpty(draft) ? " — held input discarded" : ""}
+        </div>
+      )}
+      {paneId !== null && !chatView && !ended && !connected && (
+        <div className="terminal-banner terminal-banner-warning" role="status">
+          reconnecting to herdr web ui…
+          {draft.text.length > 0 && <span className="draft-held"> input held: “{draft.text}”</span>}
+        </div>
+      )}
+      {paneId !== null && !ended && connected && !draftIsEmpty(draft) && (
+        <div className="terminal-banner terminal-banner-draft" role="status">
+          <span className="draft-label">{t("Input held until the terminal is ready:")}</span>
+          {draft.text.length > 0 && <code className="draft-text">{draft.text}</code>}
+          {/* the preview shows the start of the text: without this, a draft that lost its end looks whole */}
+          {draft.truncated && <span className="draft-truncated">{t("Some input was too long to hold and was left out.")}</span>}
+          <span className="draft-actions">
+            <button type="button" className="draft-send" disabled={draft.text.length === 0 || observing || secretActive || held} onClick={sendDraft}>
+              {t("Send")}
+            </button>
+            <button type="button" className="draft-discard" onClick={discardDraft}>
+              {t("Discard")}
+            </button>
+          </span>
+        </div>
+      )}
+      {paneId !== null && !ended && observing && (
+        <div className="terminal-banner terminal-banner-observe" role="status">
+          view only — the operator’s screen size is untouched
+        </div>
+      )}
+      {clipboardNote && (
+        <div className="terminal-banner" role="status">
+          {clipboardNote}
+        </div>
+      )}
+    </div>
+  );
+  const mount = (<div key="mount" className={`pane-terminal${paneId === null ? " is-idle" : ""}`} ref={hostRef} />);
+  const chatOverlay = (<>
+    {paneId !== null && showChat && (
+      <RenderBoundary resetKey={paneId} fallback={(retry) => (
+        <div className="chat-view"><div className="chat-empty" role="alert">
+          <p>{t("The chat can't be shown. The terminal still works.")}</p>
+          <button type="button" className="btn" onClick={retry}>{t("Try again")}</button>
+        </div></div>
+      )}>
+      {/* a pane's chat never commits another pane's turns: a new pane is a new ChatView.
+          The session herdr reports is left out of the key: it can change while the
+          conversation stays (a shared Codex daemon), and the chat follows history_id itself */}
+      <ChatView
+        key={paneId}
+        paneId={paneId}
+        refreshKey={chatRefresh}
+        sentKey={chatSent}
+        connected={connected}
+        ended={ended}
+        agent={agent}
+        agentStatus={agentStatus}
+        onMetadata={onChatMetadata}
+        onRead={onChatRead}
+        greeted={greeted}
+        onPrompt={onChatPrompt}
+        onSuggestion={onChatSuggestion}
+        promptRefreshKey={promptRefresh}
+        pendingAnswer={pendingAnswer !== null && pendingAnswer.pane === paneId ? pendingAnswer : null}
+        onPendingAnswerDone={clearPendingAnswer}
+        promptDock={promptDock}
+        onPromptAnswered={onPromptAnswered}
+      />
+      </RenderBoundary>
+    )}
+  </>);
+  const chatLower = (<>
+    {/* the queue is the composer's, so it shows under the chat lens only: there alone is an open
+        Codex question known (heldByOpenQueue), and Send now must not type into one */}
+    {paneId !== null && showChat && !observing && !ended && queueOwner !== null && queued.length > 0 && (
+      <section className={`composer-queue${readyForQueue ? " is-ready" : ""}${heldHidden ? " is-folded" : ""}`} aria-label={t("Queued messages")}>
+        {(() => {
+          // one caption line: the sentence says the state
+          const caption = <>
+            <span className="composer-queue-mark" aria-hidden="true"><Clock /></span>
+            <span className="composer-queue-caption">
+              {t(readyForQueue ? "Held message — review and send" : "Held until the agent is ready")}
+              {heldCountShown(queued.length, heldFold) && <> · {queued.length === 1 ? t("{n} message", { n: 1 }) : t("{n} messages", { n: queued.length })}</>}
+            </span>
+          </>;
+          return <div className="composer-queue-heading">
+            {/* the count stays for assistive tech, beside the button and not in its name */}
+            <strong className="visually-hidden">{t("Queued messages ({n})", { n: queued.length })}</strong>
+            {heldToggle
+              ? <button type="button" className="composer-queue-toggle" ref={setHeldToggle} aria-expanded={!heldHidden} aria-controls={`queued-list-${queueOwner}`}
+                  onClick={() => { setHeldOpened(heldHidden); }}>
+                  {caption}
+                  <span className="composer-queue-toggle-caret" aria-hidden="true"><ChevronRight /></span>
+                </button>
+              : caption}
+          </div>;
+        })()}
+        {queueStore.isUnsaved(queueOwner) && <p className="composer-queue-error" role="status">{t("Queue could not be saved. Keep this tab open or copy the messages before reloading.")}</p>}
+        <ol className="composer-queue-list" id={`queued-list-${queueOwner}`} ref={heldListRef} tabIndex={-1}
+          onFocus={() => { setHeldOpened((opened) => heldOpenOnFocus(heldFold, opened)); }}>
+        {queued.map((message, index) => <li className="composer-queue-item" key={message.id}>
+          <label className="visually-hidden" htmlFor={`queued-${message.id}`}>{t("Message {n}", { n: index + 1 })}</label>
+          <textarea
+            id={`queued-${message.id}`}
+            className="composer-queue-text"
+            value={message.text}
+            rows={Math.min(4, message.text.split("\n").length)}
+            aria-label={t("Queued message {n}", { n: index + 1 })}
+            maxLength={MAX_COMPOSER_CHARS}
+            disabled={queueStore.isSending(message.id)}
+            spellCheck={false} autoCapitalize="off" autoCorrect="off"
+            onChange={(event) => { queueStore.edit(queueOwner, message.id, event.target.value); }}
+          />
+          <div className="composer-queue-actions">
+            <button type="button" className="composer-queue-send"
+              disabled={!connected || held || secretActive || queueSending !== null || queued.some((item) => queueStore.isSending(item.id)) || heldByOpenQueue || message.text.trim().length === 0}
+              title={heldByOpenQueue ? t("Codex has a question open in the terminal: answer it above first") : undefined}
+              onClick={() => {
+                if (sendingRef.current || !queueStore.beginSend(queueOwner, message.id)) return;
+                sendingRef.current = true;
+                setQueueSending(message.id); setQueueError(null);
+                const owner = queueOwner;
+                void Promise.resolve(sendComposerText(message.text))
+                  .then((result) => {
+                    if (result === true) { queueStore.remove(owner, message.id); }
+                    else setQueueError({ owner, id: message.id, text: typeof result === "string" ? result : t("Not sent. Reconnect and try again.") });
+                  })
+                  .catch(() => setQueueError({ owner, id: message.id, text: t("Not confirmed. Check the terminal before sending again.") }))
+                  .finally(() => { queueStore.endSend(owner, message.id); sendingRef.current = false; setQueueSending(null); });
+              }}>{t("Send now")}</button>
+            <button type="button" className="composer-queue-discard" disabled={queueStore.isSending(message.id)}
+              onClick={() => { queueStore.remove(queueOwner, message.id); }}>
+              {/* a phone draws the X; the word stays the button's name */}
+              <span className="composer-queue-discard-text">{t("Discard")}</span><X aria-hidden="true" />
+            </button>
+          </div>
+          {queueError?.owner === queueOwner && queueError.id === message.id && <p className="composer-queue-error" role="status">{queueError.text}</p>}
+        </li>)}
+        </ol>
+      </section>
+    )}
+    {paneId !== null && showChat && !observing && queueOwner !== null && pending.length > 0 && <PendingMessages
+      key={`pending-${queueOwner}`}
+      messages={pending.map((message) => !message.serverOwned || pendingMessages.isOwned(queueOwner, message.id, pendingScopeRef.current)
+        ? message : { ...message, serverOwned: false, state: "uncertain" as const })}
+      connected={connected}
+      blocked={held || secretActive || ended || heldByOpenQueue || answering !== null}
+      unsaved={pendingMessages.isUnsaved(queueOwner)}
+      isBusy={(id) => pendingMessages.isBusy(queueOwner, id)}
+      onSendNow={(id) => actOnPending(id, "steer")}
+      onDiscard={(id) => actOnPending(id, "discard")}
+    />}
+    {/* The prompt card's place: under the held messages (which fold to their caption while it is
+        open), directly over the input card, on the same column. ChatView renders the card into
+        it. It is a live region of its own, since the card is no longer inside the transcript's
+        log: a prompt that arrives is announced, as it was there. */}
+    {paneId !== null && showChat && <div className="prompt-dock" ref={setPromptDock} aria-live="polite" />}
+  </>);
+  const secretBox = (<Fragment key="secretbox">
+    {paneId !== null && secretActive && !observing && !ended && connected && outputReady && <SecretInput
+      key={`${paneId}:${secret.prompt}`} prompt={secret.prompt}
+      onSend={(value) => socketRef.current?.sendSecret(paneId, secret.prompt, value) ?? null}
+      onCancel={() => { if (socketRef.current?.connected) socketRef.current.sendInput(paneId, "\u0003"); }}
+    />}
+  </Fragment>);
+  const composerBox = (<>
+    {/* the composer belongs to the chat tree: in terminal mode the grid itself is
+        the input surface (key bar included), so a second box would only duplicate it */}
+    {paneId !== null && showChat && !secretActive && !observing && !ended && (
+      <Composer
+        key={paneId}
+        paneId={paneId}
+        autoFocus={!autoSelected && !coarse}
+        agent={agent}
+        agentStatus={agentStatus}
+        backgroundTasks={backgroundTasks}
+        metadata={chatMetadata?.pane === paneId ? chatMetadata.value : null}
+        connected={connected && !held}
+        answerHint={answering === null ? null
+          : pendingAnswer?.promptId === answering.id ? t("Confirm your answer in the card above, or type another…") : answerHint(answering)}
+        // no suggestion under any card, a fallback or queued one included
+        suggestion={chatPrompt?.pane !== paneId && chatSuggestion?.pane === paneId ? chatSuggestion.value : null}
+        greeting={greetingDue ? (
+          <div className={`composer-greeting${greeted ? "" : " is-out"}`} ref={greetingRef} aria-hidden={greeted ? undefined : true}>
+            <p className="composer-greeting-title">{t("What should {agent} do in {folder}?", { agent: agentDisplayLabel(agent), folder })}</p>
+            {/* each part keeps its own direction: a right-to-left PC name does not reorder the path */}
+            <p className="composer-greeting-where">{machineName && <bdi>{machineName}</bdi>}{machineName && cwd ? " · " : ""}{cwd && <bdi>{cwd}</bdi>}</p>
+          </div>
+        ) : null}
+        onSend={composerSend}
+        onAbort={abortTurn}
+        onUploadImage={uploadImage}
+      />
+    )}
+  </>);
+  const termLower = (<Fragment key="termlower">
+    {paneId !== null && !secretActive && !observing && !ended && inputLine && <TerminalInput key={paneId} owner={paneStorageId(machineId, paneId)} onComposing={setComposing} connected={connected && !held} onSend={sendTerminalLine} onEnter={pressEnter} />}
+    {paneId !== null && !secretActive && !observing && !chatView && <KeyBar disabled={composing || !connected || !inputReady || held || ended} onKey={pressKey}
+      modifiers={modifiers} onToggleModifier={toggleModifier} items={settings.keyBarItems}
+      {...(coarse ? { directTyping, onToggleDirect: toggleDirect } : {})} />}
+  </Fragment>);
+
   return (
     // data-direct-typing: xterm's own field raises the soft keyboard here (lib/viewport.ts)
-    <div ref={stackRef} className={`terminal-stack${chatView ? " is-chat" : ""}${greeted ? " is-greeted" : ""}`} data-pane-owner={paneId === null ? undefined : paneStorageId(machineId, paneId)} data-direct-typing={coarse && directTyping && !chatView ? "" : undefined}>
-      {paneId === null && restoreError !== null && (
-        <div className="terminal-placeholder is-restore-error" role="status">
-          <div className="terminal-placeholder-inner">
-            <TriangleAlert aria-hidden="true" />
-            <span>{t("herdr could not restore this pane")}</span>
-            <span className="terminal-placeholder-detail">{restoreError}</span>
-          </div>
-        </div>
-      )}
-      {paneId === null && restoreError === null && (
-        <div className="terminal-placeholder">
-          <div className="terminal-placeholder-inner">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <rect x="2.5" y="4" width="19" height="16" rx="2.5" />
-              <path d="M7 9l3 3-3 3" />
-              <path d="M12.5 15h4.5" />
-            </svg>
-            <span>{t("Select a pane to open its terminal")}</span>
-          </div>
-        </div>
-      )}
-      <div className="terminal-banners">
-        {paneId !== null && held && (
-          <div className="terminal-banner terminal-banner-warning" role="status">
-            <span>{t("Another app has this pane open. It connects here as soon as that app lets go.")}</span>
-            {!observing && socketRef.current?.canTakeOver() && (
-              <button type="button" className="btn terminal-banner-action" title={t("Take this pane from another web app or terminal attach. That connection will close.")} onClick={() => { if (paneId !== null) socketRef.current?.takeOver(paneId); }}>{t("Open here")}</button>
-            )}
-          </div>
-        )}
-        {paneId !== null && !chatView && unsupported && (
-          <div className="terminal-banner terminal-banner-soon" role="status">
-            <span>{t("Live terminal is coming to Windows PCs: herdr cannot attach a terminal there yet. The chat lens works now.")}</span>
-          </div>
-        )}
-        {paneId !== null && outputError && (
-          <div className="terminal-banner terminal-banner-warning terminal-banner-output-error" role="status">
-            <span>{outputError}</span>
-            <a className="btn" href={`?machine=${encodeURIComponent(machineId)}&pane=${encodeURIComponent(paneId)}`}>{t("Reconnect")}</a>
-          </div>
-        )}
-        {!chatView && inputError && <div className="terminal-banner" role="status">{inputError}<button type="button" className="btn terminal-banner-action" onClick={() => setInputError(null)}>{t("Dismiss")}</button></div>}
-        {!chatView && !observing && connected && !inputReady && !held && !ended && <div className="terminal-banner" role="status">{t("Waiting for terminal input…")}</div>}
-        {/* the chat lens says these itself (ChatView), inline; the pills are the grid's */}
-        {paneId !== null && !chatView && ended && !outputError && (
-          <div className="terminal-banner" role="status">
-            terminal ended{!draftIsEmpty(draft) ? " — held input discarded" : ""}
-          </div>
-        )}
-        {paneId !== null && !chatView && !ended && !connected && (
-          <div className="terminal-banner terminal-banner-warning" role="status">
-            reconnecting to herdr web ui…
-            {draft.text.length > 0 && <span className="draft-held"> input held: “{draft.text}”</span>}
-          </div>
-        )}
-        {paneId !== null && !ended && connected && !draftIsEmpty(draft) && (
-          <div className="terminal-banner terminal-banner-draft" role="status">
-            <span className="draft-label">{t("Input held until the terminal is ready:")}</span>
-            {draft.text.length > 0 && <code className="draft-text">{draft.text}</code>}
-            {/* the preview shows the start of the text: without this, a draft that lost its end looks whole */}
-            {draft.truncated && <span className="draft-truncated">{t("Some input was too long to hold and was left out.")}</span>}
-            <span className="draft-actions">
-              <button type="button" className="draft-send" disabled={draft.text.length === 0 || observing || secretActive || held} onClick={sendDraft}>
-                {t("Send")}
-              </button>
-              <button type="button" className="draft-discard" onClick={discardDraft}>
-                {t("Discard")}
-              </button>
-            </span>
-          </div>
-        )}
-        {paneId !== null && !ended && observing && (
-          <div className="terminal-banner terminal-banner-observe" role="status">
-            view only — the operator’s screen size is untouched
-          </div>
-        )}
-        {clipboardNote && (
-          <div className="terminal-banner" role="status">
-            {clipboardNote}
-          </div>
-        )}
-      </div>
-      <div className="terminal-surface">
-        <div className={`pane-terminal${paneId === null ? " is-idle" : ""}`} ref={hostRef} />
-        {paneId !== null && chatView && (
-          <RenderBoundary resetKey={paneId} fallback={(retry) => (
-            <div className="chat-view"><div className="chat-empty" role="alert">
-              <p>{t("The chat can't be shown. The terminal still works.")}</p>
-              <button type="button" className="btn" onClick={retry}>{t("Try again")}</button>
-            </div></div>
-          )}>
-          {/* a pane's chat never commits another pane's turns: a new pane is a new ChatView.
-              The session herdr reports is left out of the key: it can change while the
-              conversation stays (a shared Codex daemon), and the chat follows history_id itself */}
-          <ChatView
-            key={paneId}
-            paneId={paneId}
-            refreshKey={chatRefresh}
-            sentKey={chatSent}
-            connected={connected}
-            ended={ended}
-            agent={agent}
-            agentStatus={agentStatus}
-            onMetadata={onChatMetadata}
-            onRead={onChatRead}
-            greeted={greeted}
-            onPrompt={onChatPrompt}
-            onSuggestion={onChatSuggestion}
-            promptRefreshKey={promptRefresh}
-            pendingAnswer={pendingAnswer !== null && pendingAnswer.pane === paneId ? pendingAnswer : null}
-            onPendingAnswerDone={clearPendingAnswer}
-            promptDock={promptDock}
-            onPromptAnswered={onPromptAnswered}
-          />
-          </RenderBoundary>
-        )}
-      </div>
-      {/* the queue is the composer's, so it shows under the chat lens only: there alone is an open
-          Codex question known (heldByOpenQueue), and Send now must not type into one */}
-      {paneId !== null && chatView && !observing && !ended && queueOwner !== null && queued.length > 0 && (
-        <section className={`composer-queue${readyForQueue ? " is-ready" : ""}${heldHidden ? " is-folded" : ""}`} aria-label={t("Queued messages")}>
-          {(() => {
-            // one caption line: the sentence says the state
-            const caption = <>
-              <span className="composer-queue-mark" aria-hidden="true"><Clock /></span>
-              <span className="composer-queue-caption">
-                {t(readyForQueue ? "Held message — review and send" : "Held until the agent is ready")}
-                {heldCountShown(queued.length, heldFold) && <> · {queued.length === 1 ? t("{n} message", { n: 1 }) : t("{n} messages", { n: queued.length })}</>}
-              </span>
-            </>;
-            return <div className="composer-queue-heading">
-              {/* the count stays for assistive tech, beside the button and not in its name */}
-              <strong className="visually-hidden">{t("Queued messages ({n})", { n: queued.length })}</strong>
-              {heldToggle
-                ? <button type="button" className="composer-queue-toggle" ref={setHeldToggle} aria-expanded={!heldHidden} aria-controls={`queued-list-${queueOwner}`}
-                    onClick={() => { setHeldOpened(heldHidden); }}>
-                    {caption}
-                    <span className="composer-queue-toggle-caret" aria-hidden="true"><ChevronRight /></span>
-                  </button>
-                : caption}
-            </div>;
-          })()}
-          {queueStore.isUnsaved(queueOwner) && <p className="composer-queue-error" role="status">{t("Queue could not be saved. Keep this tab open or copy the messages before reloading.")}</p>}
-          <ol className="composer-queue-list" id={`queued-list-${queueOwner}`} ref={heldListRef} tabIndex={-1}
-            onFocus={() => { setHeldOpened((opened) => heldOpenOnFocus(heldFold, opened)); }}>
-          {queued.map((message, index) => <li className="composer-queue-item" key={message.id}>
-            <label className="visually-hidden" htmlFor={`queued-${message.id}`}>{t("Message {n}", { n: index + 1 })}</label>
-            <textarea
-              id={`queued-${message.id}`}
-              className="composer-queue-text"
-              value={message.text}
-              rows={Math.min(4, message.text.split("\n").length)}
-              aria-label={t("Queued message {n}", { n: index + 1 })}
-              maxLength={MAX_COMPOSER_CHARS}
-              disabled={queueStore.isSending(message.id)}
-              spellCheck={false} autoCapitalize="off" autoCorrect="off"
-              onChange={(event) => { queueStore.edit(queueOwner, message.id, event.target.value); }}
-            />
-            <div className="composer-queue-actions">
-              <button type="button" className="composer-queue-send"
-                disabled={!connected || held || secretActive || queueSending !== null || queued.some((item) => queueStore.isSending(item.id)) || heldByOpenQueue || message.text.trim().length === 0}
-                title={heldByOpenQueue ? t("Codex has a question open in the terminal: answer it above first") : undefined}
-                onClick={() => {
-                  if (sendingRef.current || !queueStore.beginSend(queueOwner, message.id)) return;
-                  sendingRef.current = true;
-                  setQueueSending(message.id); setQueueError(null);
-                  const owner = queueOwner;
-                  void Promise.resolve(sendComposerText(message.text))
-                    .then((result) => {
-                      if (result === true) { queueStore.remove(owner, message.id); }
-                      else setQueueError({ owner, id: message.id, text: typeof result === "string" ? result : t("Not sent. Reconnect and try again.") });
-                    })
-                    .catch(() => setQueueError({ owner, id: message.id, text: t("Not confirmed. Check the terminal before sending again.") }))
-                    .finally(() => { queueStore.endSend(owner, message.id); sendingRef.current = false; setQueueSending(null); });
-                }}>{t("Send now")}</button>
-              <button type="button" className="composer-queue-discard" disabled={queueStore.isSending(message.id)}
-                onClick={() => { queueStore.remove(queueOwner, message.id); }}>
-                {/* a phone draws the X; the word stays the button's name */}
-                <span className="composer-queue-discard-text">{t("Discard")}</span><X aria-hidden="true" />
-              </button>
-            </div>
-            {queueError?.owner === queueOwner && queueError.id === message.id && <p className="composer-queue-error" role="status">{queueError.text}</p>}
-          </li>)}
-          </ol>
+    <div ref={stackRef} className={`terminal-stack${chatView ? " is-chat" : ""}${split ? " is-split" : ""}${greeted ? " is-greeted" : ""}`} data-pane-owner={paneId === null ? undefined : paneStorageId(machineId, paneId)} data-direct-typing={coarse && directTyping && !chatView ? "" : undefined} data-full={split ? expanded ?? "" : undefined}>
+      {placeholders}
+      {split && (
+        <section key="msgbox" className="split-box split-msg" aria-label={t("Chat")}>
+          {splitHead("chat")}
+          <div className="split-msg-body">{chatOverlay}{chatLower}{composerBox}</div>
         </section>
       )}
-      {paneId !== null && chatView && !observing && queueOwner !== null && pending.length > 0 && <PendingMessages
-        key={`pending-${queueOwner}`}
-        messages={pending.map((message) => !message.serverOwned || pendingMessages.isOwned(queueOwner, message.id, pendingScopeRef.current)
-          ? message : { ...message, serverOwned: false, state: "uncertain" as const })}
-        connected={connected}
-        blocked={held || secretActive || ended || heldByOpenQueue || answering !== null}
-        unsaved={pendingMessages.isUnsaved(queueOwner)}
-        isBusy={(id) => pendingMessages.isBusy(queueOwner, id)}
-        onSendNow={(id) => actOnPending(id, "steer")}
-        onDiscard={(id) => actOnPending(id, "discard")}
-      />}
-      {/* The prompt card's place: under the held messages (which fold to their caption while it is
-          open), directly over the input card, on the same column. ChatView renders the card into
-          it. It is a live region of its own, since the card is no longer inside the transcript's
-          log: a prompt that arrives is announced, as it was there. */}
-      {paneId !== null && chatView && <div className="prompt-dock" ref={setPromptDock} aria-live="polite" />}
-      {/* the composer belongs to the chat lens: in terminal mode the grid itself is
+      {!split && banners}
+      <div key="termsurface" className="terminal-surface">
+        {split && banners}
+        {split && splitHead("term")}
+        {mount}
+        {!split && chatOverlay}
+      </div>
+      {!split && chatLower}
+      {/* the composer belongs to the chat tree: in terminal mode the grid itself is
           the input surface (key bar included), so a second box would only duplicate it */}
-      {paneId !== null && secretActive && !observing && !ended && connected && outputReady && <SecretInput
-        key={`${paneId}:${secret.prompt}`} prompt={secret.prompt}
-        onSend={(value) => socketRef.current?.sendSecret(paneId, secret.prompt, value) ?? null}
-        onCancel={() => { if (socketRef.current?.connected) socketRef.current.sendInput(paneId, "\u0003"); }}
-      />}
-      {paneId !== null && chatView && !secretActive && !observing && !ended && (
-        <Composer
-          key={paneId}
-          paneId={paneId}
-          autoFocus={!autoSelected && !coarse}
-          agent={agent}
-          agentStatus={agentStatus}
-          backgroundTasks={backgroundTasks}
-          metadata={chatMetadata?.pane === paneId ? chatMetadata.value : null}
-          connected={connected && !held}
-          answerHint={answering === null ? null
-            : pendingAnswer?.promptId === answering.id ? t("Confirm your answer in the card above, or type another…") : answerHint(answering)}
-          // no suggestion under any card, a fallback or queued one included
-          suggestion={chatPrompt?.pane !== paneId && chatSuggestion?.pane === paneId ? chatSuggestion.value : null}
-          greeting={greetingDue ? (
-            <div className={`composer-greeting${greeted ? "" : " is-out"}`} ref={greetingRef} aria-hidden={greeted ? undefined : true}>
-              <p className="composer-greeting-title">{t("What should {agent} do in {folder}?", { agent: agentDisplayLabel(agent), folder })}</p>
-              {/* each part keeps its own direction: a right-to-left PC name does not reorder the path */}
-              <p className="composer-greeting-where">{machineName && <bdi>{machineName}</bdi>}{machineName && cwd ? " · " : ""}{cwd && <bdi>{cwd}</bdi>}</p>
-            </div>
-          ) : null}
-          onSend={composerSend}
-          onAbort={abortTurn}
-          onUploadImage={uploadImage}
-        />
-      )}
-      {paneId !== null && !secretActive && !observing && !ended && inputLine && <TerminalInput key={paneId} owner={paneStorageId(machineId, paneId)} onComposing={setComposing} connected={connected && !held} onSend={sendTerminalLine} onEnter={pressEnter} />}
-      {paneId !== null && !secretActive && !observing && !chatView && <KeyBar disabled={composing || !connected || !inputReady || held || ended} onKey={pressKey}
-        modifiers={modifiers} onToggleModifier={toggleModifier} items={settings.keyBarItems}
-        {...(coarse ? { directTyping, onToggleDirect: toggleDirect } : {})} />}
+      {secretBox}
+      {!split && composerBox}
+      {termLower}
     </div>
   );
 }

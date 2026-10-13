@@ -6,6 +6,7 @@ import { chromium } from "playwright-core";
 import { herdrRpc } from "../server/herdr/client.ts";
 import { paneStorageId } from "../shared/machines.ts";
 import { openSettingsPage } from "./settings-page.ts";
+import { runMoreItem } from "./header-more.ts";
 const fixture = JSON.parse(readFileSync(process.argv[2]!, "utf8")) as { root: string; remoteHome: string; port: number; machineId: string; secondMachineId: string; paneId: string };
 const { machineId: a, secondMachineId: b, paneId } = fixture;
 const origin = `http://127.0.0.1:${fixture.port}`;
@@ -145,7 +146,8 @@ try {
   await page.getByRole("button", { name: "Close settings", exact: true }).click();
   await page.screenshot({ path: join(evidence, "desktop-light.png") });
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole("button", { name: "Open workspace list", exact: true }).click();
+  // a phone's drawer opens from the ⋯ sheet, not a header toggle
+  await runMoreItem(page, "Open workspace list");
   await page.waitForFunction(() => Math.abs(document.querySelector(".sidebar.is-open")!.getBoundingClientRect().x) < 1);
   await page.screenshot({ path: join(evidence, "mobile-light.png") });
   await page.locator(".sidebar-footer").getByRole("button", { name: "Settings", exact: true }).click();
@@ -155,13 +157,13 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
   await page.getByRole("button", { name: "Close PC setup" }).click();
   // Settings closed the drawer when it opened, and Add PC closed Settings: open the drawer again
-  await page.getByRole("button", { name: "Open workspace list", exact: true }).click();
+  await runMoreItem(page, "Open workspace list");
   await page.locator(".sidebar-footer").getByRole("button", { name: "Settings", exact: true }).click();
   const settings = page.getByRole("dialog", { name: "Settings", exact: true });
   await openSettingsPage(page, "Appearance");
   await settings.getByRole("button", { name: "Dark", exact: true }).click();
   await settings.getByRole("button", { name: "Close settings", exact: true }).click();
-  await page.getByRole("button", { name: "Open workspace list", exact: true }).click();
+  await runMoreItem(page, "Open workspace list");
   await page.waitForFunction(() => Math.abs(document.querySelector(".sidebar.is-open")!.getBoundingClientRect().x) < 1);
   await page.screenshot({ path: join(evidence, "mobile-dark.png") });
   assert.deepEqual(errors, []);

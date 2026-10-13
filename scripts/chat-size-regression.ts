@@ -75,10 +75,10 @@ async function agentListed(origin: string, paneId: string): Promise<void> {
 const attached = (page: Page, nth = 1) => page.waitForFunction((count) => (window as unknown as { frames_: { dir: string; type: string }[] }).frames_.filter((f) => f.dir === "in" && f.type === "input-ready").length >= count, nth, { timeout: 15_000 });
 
 /**
- * The chat lens leaves the shared terminal's size alone (#361): a desktop tab drives a pane's grid
- * from its terminal lens, a phone opens the same pane in the chat lens, and the program in the pane
- * still sees the desktop's size. Switching the phone to its terminal lens fits the grid to the phone.
- * The size is the one the pane's own shell reports (`stty size`), not what either browser thinks.
+ * The split drives the shared grid from its visible terminal box, whatever the remembered
+ * lens: a desktop tab drives a pane's grid from its terminal lens, a phone fits the same
+ * pane's grid to its own box, and the program in the pane sees the phone's size. The size
+ * is the one the pane's own shell reports (`stty size`), not what either browser thinks.
  */
 export async function checkChatKeepsTerminalSize(browser: Browser, origin: string): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-chat-size-"));
@@ -93,31 +93,34 @@ export async function checkChatKeepsTerminalSize(browser: Browser, origin: strin
     await agentListed(origin, paneId);
     const size = shellSize(paneId);
     const open = (options: Parameters<Browser["newContext"]>[0], settings: object) => openRecording(browser, contexts, origin, paneId, options, settings);
-    const sent = (page: Page) => page.evaluate(() => (window as unknown as { frames_: { dir: string; type: string; keep_size?: boolean }[] }).frames_.filter((f) => f.dir === "out" && (f.type === "attach" || f.type === "resize")));
 
     const desktop = await open({ viewport: { width: 1280, height: 800 } }, { language: "en", defaultView: "terminal" });
     await attached(desktop);
     const desktopSize = await size();
 
     const phone = await open({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true }, { language: "en", defaultView: "chat" });
-    await phone.locator(".terminal-stack.is-chat").waitFor({ state: "attached" });
+    await phone.locator(".terminal-stack.is-split").waitFor({ state: "attached" });
     await attached(phone);
-    // the chat lens attaches without driving the grid, and sends no resize of its own
-    assert.deepEqual(await sent(phone), [{ dir: "out", type: "attach", keep_size: true }]);
-    assert.equal(await size(), desktopSize, "the phone's chat lens leaves the desktop's grid");
-    if (process.env.UI_EVIDENCE_DIR) await desktop.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "chat-size-desktop.png") });
-    console.log(`PASS a phone's chat lens leaves the shared grid at the desktop's ${desktopSize}`);
-
-    // the phone's terminal lens fits the grid to the phone: the shell sees it change
-    // on a phone the lens switch shows no label: the button is known by its title
-    await phone.locator('button[title^="Live terminal"]').tap();
+    // the split shows the grid whatever the remembered lens: it fits the grid to the phone,
+    // so the shell sees the phone's grid, not the desktop's (the first attach may still carry
+    // the remembered lens while the snapshot loads; the fit below is what drives the grid)
     await phone.waitForFunction(() => (window as unknown as { frames_: { dir: string; type: string }[] }).frames_.some((f) => f.dir === "out" && f.type === "resize"), undefined, { timeout: 10_000 });
     const deadline = Date.now() + 10_000;
     let phoneSize = desktopSize;
-    while (phoneSize === desktopSize && Date.now() < deadline) phoneSize = await size();
-    assert.notEqual(phoneSize, desktopSize, "the phone's terminal lens fits the grid to the phone");
+    let steady = 0;
+    // the grid settles through a refit or two (fonts, then the chat): read it steady, not first
+    while (Date.now() < deadline) {
+      const next = await size();
+      steady = next !== desktopSize && next === phoneSize ? steady + 1 : 0;
+      phoneSize = next;
+      if (steady >= 2) break;
+      await Bun.sleep(150);
+    }
+    assert.notEqual(phoneSize, desktopSize, "the phone's split fits the grid to the phone");
     assert.ok(Number(phoneSize.split(" ")[1]) < Number(desktopSize.split(" ")[1]), `phone ${phoneSize} narrower than desktop ${desktopSize}`);
-    console.log(`PASS the phone's terminal lens fits the grid to ${phoneSize}`);
+    console.log(`PASS the phone's split fits the grid to ${phoneSize}`);
+    // the phone's job is done: its live box would keep refitting under the desktop's asserts
+    await phone.close();
 
     // the desktop's terminal lens ignored that resize: it drives the grid itself. Entering the chat
     // lens, its hidden screen takes the grid the pty has now, since what the chat reads there (a

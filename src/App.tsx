@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Bell, Ellipsis, FolderOpen, Lock, Menu, MessageSquare, PanelLeft, Plus, Search, SquareTerminal, X } from "lucide-react";
+import { Bell, Ellipsis, FolderOpen, Lock, Menu, MessageSquare, PanelLeft, Plus, Search, Settings, SquareTerminal, X } from "lucide-react";
 
 import type { AgentStatus, ClientRole, ServerMessage, AccessRefusal, HealthAuth, HerdrPane } from "../shared/protocol.ts";
 import { ApiError, authenticate, fetchHealth, fetchBridgeHealth, fetchMachines, fetchSession, pairDevice, sendTestPush, signOut, type HealthInfo } from "./lib/api.ts";
@@ -21,6 +21,8 @@ import { MachineDialog } from "./components/MachineDialog.tsx";
 import { RowMenu, type RowMenuItem } from "./components/RowMenu.tsx";
 import { focusWorkspaceListToggle } from "./lib/focus.ts";
 import { headerCrumb, showsChat } from "./lib/headerCrumb.ts";
+import { MOBILE_QUERY, useMediaQuery } from "./lib/useMediaQuery.ts";
+import { MobileChrome } from "./components/MobileChrome.tsx";
 import { paneStorageId, type Machine, type MachineEvent } from "../shared/machines.ts";
 import { takeAuthTokenFromUrl } from "./lib/authLink.ts";
 import { applyPaneStatus } from "./lib/snapshot.ts";
@@ -610,6 +612,7 @@ export function App() {
   // the menu's button carries a dot while alerts are off here: the one state of the menu worth a glance
   const alertsOffDot = bellVisible && !bell.on;
   const connWord = t(connected ? "live" : outputStopped ? "disconnected" : "reconnecting");
+  const connTitle = [connected ? null : connWord, targetHerdr ? t("herdr {version} · protocol {protocol}", { version: targetHerdr.version, protocol: targetHerdr.protocol }) : null].filter((part) => part !== null).join(" · ") || undefined;
   const crumb = selectedPane && selectedTitle !== null
     ? headerCrumb({ machine: selectedMachine?.name ?? selectedMachineId, workspace: selectedWorkspace?.label ?? selectedPane.workspace_id, title: selectedTitle, cwd: selectedPane.cwd })
     : null;
@@ -700,6 +703,58 @@ export function App() {
   // take it (from 769px). A pane herdr could not restore draws a placeholder, not the chat.
   const chatShown = showsChat(selectedPane, view);
 
+  // below the drawer's breakpoint the chrome is the slim bar plus the slide bar, and the
+  // terminal shows both lenses at once in the same host instead of the remembered one alone
+  const mobile = useMediaQuery(MOBILE_QUERY);
+  const isMobileShell = mobile && snapshot !== null && selectedPane !== null && selectedWorkspace !== null && selectedTitle !== null;
+
+  // the ⋯ sheet on a phone: the palette first, then the drawer tree and settings (both full
+  // overlays from there), then the header menu's own items. Notices open above these.
+  const mobileMenuItems: RowMenuItem[] = [
+    paletteItem,
+    { id: "workspace-list", label: t(drawerOpen ? "Close workspace list" : "Open workspace list"), icon: Menu, run: () => setDrawerOpen((open) => !open) },
+    { id: "settings", label: t("Settings"), icon: Settings, run: () => { setSettingsSection(null); setSettingsOpen(true); } },
+    ...moreItems,
+  ];
+
+  // one pane mount for either shell: the split renders both lenses at once on a phone, the
+  // remembered lens alone on the desktop. The mount keeps its parent and key across the
+  // breakpoint, so crossing it never unmounts the terminal, and the attach survives.
+  const renderPane = (split: boolean) => (
+    <PaneTerminal
+      key={selectedMachineId}
+      paneId={selectedPane?.restore_error ? null : selectedPaneId}
+      restoreError={selectedPane?.restore_error ?? null}
+      agent={selectedAgent}
+      agentStatus={selectedPane?.agent_status}
+      backgroundTasks={(selectedPane as HerdrPane | null)?.background_tasks ?? 0}
+      cwd={selectedPane?.cwd ?? null}
+      machineName={selectedMachine?.name ?? selectedMachineId}
+      view={view}
+      split={split}
+      autoSelected={autoSelected}
+      terminalFontSize={settings.terminalFontSize}
+      terminalWheelSpeed={settings.terminalWheelSpeed}
+      terminalFontFamily={settings.terminalFontFamily}
+      theme={resolvedTheme}
+      palette={settings.palette}
+      role={role}
+      onRoleAck={setRole}
+      onConnectionChange={(next) => { setConnected(next); if (next) setOutputStopped(false); }}
+      onServerMessage={handleServerMessage}
+    />
+  );
+
+  // the workspace drawer: the desktop's sidebar and the phone's tree behind the ⋯ sheet
+  const drawerAside = (<>
+    <aside id="workspace-drawer" className={`sidebar${drawerOpen ? " is-open" : ""}`}>
+      {error && <div className="error-state" role="alert"><p>{error}</p><button className="btn" onClick={() => void load()}>{t("Retry")}</button></div>}
+      <MachineSidebar machines={machines} selectedMachineId={selectedMachineId} selectedPaneId={selectedPaneId} actions={actions} onSelect={selectTarget} onSetup={(machine, update = false) => { setUpdateRemote(update); setMachineDialog(machine); }} onNew={(id) => { setNewSessionMachineId(id); setNewTab(null); setNewSessionOpen(true); setDrawerOpen(false); }} />
+      <SidebarResizer width={sidebarWidth} onResize={setSidebarWidth} />
+    </aside>
+    {drawerOpen && <div className="scrim" aria-hidden="true" onClick={() => setDrawerOpen(false)} />}
+  </>);
+
   if (locked === null) {
     // the auth state is unknown until /api/health or /api/session answers (ten seconds when
     // herdr is down): show the shell without the terminal, and so without a WebSocket,
@@ -730,6 +785,26 @@ export function App() {
 
   return (
     <MachineContext.Provider value={selectedMachineId}><div className={`app${sidebarCollapsed ? " sidebar-collapsed" : ""}`} style={sidebarWidth === null ? undefined : { "--sidebar-user-w": `${sidebarWidth}px` } as CSSProperties}>
+      {mobile && snapshot && selectedPane && selectedWorkspace && selectedTitle !== null ? (
+        <MobileChrome
+          machines={machines}
+          snapshot={snapshot}
+          selectedPaneId={selectedPaneId}
+          connText={connWord}
+          connTitle={connTitle}
+          connected={connected}
+          title={selectedTitle}
+          crumb={crumb}
+          agent={selectedAgent}
+          updates={updates}
+          onOpenUpdates={() => { setSettingsSection("updates"); setSettingsOpen(true); }}
+          onSetupMachine={(machine, update = false) => { setDrawerOpen(false); setUpdateRemote(update); setMachineDialog(machine); }}
+          menuItems={mobileMenuItems}
+          alertsDot={alertsOffDot}
+          onSelectPane={selectPane}
+          onNewSession={() => actions.openNewSession()}
+        />
+      ) : (
       <header className={`app-header is-zoned${chatShown ? " is-chat" : ""}`}>
         {/* is-zoned tells this header from the connecting shell's, which has no zones to draw.
             .header-side is the sidebar's own top row from 769px (styles.css); below that its
@@ -798,7 +873,7 @@ export function App() {
           <span
             className={`conn ${connected ? "conn-live" : "conn-reconnecting"}`}
             role="status"
-            title={[connected ? null : connWord, targetHerdr ? t("herdr {version} · protocol {protocol}", { version: targetHerdr.version, protocol: targetHerdr.protocol }) : null].filter((part) => part !== null).join(" · ") || undefined}
+            title={connTitle}
           >
             <span className="conn-dot" aria-hidden="true" />
             <span className="conn-text">{connWord}</span>
@@ -843,47 +918,24 @@ export function App() {
           />
         )}
       </header>
-
+      )}
       <div className="app-body">
-        <aside id="workspace-drawer" className={`sidebar${drawerOpen ? " is-open" : ""}`}>
-          {error && <div className="error-state" role="alert"><p>{error}</p><button className="btn" onClick={() => void load()}>{t("Retry")}</button></div>}
-          <MachineSidebar machines={machines} selectedMachineId={selectedMachineId} selectedPaneId={selectedPaneId} actions={actions} onSelect={selectTarget} onSetup={(machine, update = false) => { setUpdateRemote(update); setMachineDialog(machine); }} onNew={(id) => { setNewSessionMachineId(id); setNewTab(null); setNewSessionOpen(true); setDrawerOpen(false); }} />
-          <SidebarResizer width={sidebarWidth} onResize={setSidebarWidth} />
-        </aside>
-
-        {drawerOpen && <div className="scrim" aria-hidden="true" onClick={() => setDrawerOpen(false)} />}
+        {drawerAside}
 
         {/* a file path in the chat opens in the viewer, relative to the selected pane's folder */}
         <OpenFileContext.Provider value={selectedPaneId !== null ? viewFile : null}>
         <div className={`pane-column${chatShown ? " is-chat" : ""}`}>
-        {/* over the pane only: a bar across the window would cut the sidebar off from its top row in the header */}
+        {/* over the pane only: a bar across the window would cut the sidebar off from its top row in the header.
+            On the phone the notices hold no rows: they live in the ⋯ sheet with a dot on its button. */}
+        {!isMobileShell && (<>
         <UpdateNotice updates={updates} onOpen={() => { setSettingsSection("updates"); setSettingsOpen(true); }} />
         <MachineActionBanner machines={machines} onSetup={(machine, update = false) => { setDrawerOpen(false); setUpdateRemote(update); setMachineDialog(machine); }} />
         {snapshot && selectedPane && selectedWorkspace && (
           <TabStrip snapshot={snapshot} workspace={selectedWorkspace} selectedPane={selectedPane} onSelectPane={selectPane} onNewTab={() => actions.openNewTab()} />
         )}
+        </>)}
         <main className="terminal-host">
-          <PaneTerminal
-            key={selectedMachineId}
-            paneId={selectedPane?.restore_error ? null : selectedPaneId}
-            restoreError={selectedPane?.restore_error ?? null}
-            agent={selectedAgent}
-            agentStatus={selectedPane?.agent_status}
-            backgroundTasks={(selectedPane as HerdrPane | null)?.background_tasks ?? 0}
-            cwd={selectedPane?.cwd ?? null}
-            machineName={selectedMachine?.name ?? selectedMachineId}
-            view={view}
-            autoSelected={autoSelected}
-            terminalFontSize={settings.terminalFontSize}
-            terminalWheelSpeed={settings.terminalWheelSpeed}
-            terminalFontFamily={settings.terminalFontFamily}
-            theme={resolvedTheme}
-            palette={settings.palette}
-            role={role}
-            onRoleAck={setRole}
-            onConnectionChange={(next) => { setConnected(next); if (next) setOutputStopped(false); }}
-            onServerMessage={handleServerMessage}
-          />
+          {renderPane(isMobileShell)}
         </main>
         </div>
         </OpenFileContext.Provider>

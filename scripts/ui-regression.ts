@@ -17,7 +17,8 @@ import { checkTerminalCopy } from "./terminal-copy-regression.ts";
 import { checkUsageMeters } from "./usage-regression.ts";
 import { checkNotificationStartup } from "./notification-startup-regression.ts";
 import { checkMobileViewport } from "./mobile-viewport-regression.ts";
-import { checkMobileTabs } from "./mobile-tabs-regression.ts";
+import { checkMobileSlide } from "./mobile-slide-regression.ts";
+import { checkMobileShell, checkMobileShellDesktop } from "./mobile-shell-regression.ts";
 import { checkTerminalFileInput } from "./terminal-file-input-regression.ts";
 import { checkTerminalInput } from "./terminal-input-regression.ts";
 import { checkDefaultView } from "./default-view-regression.ts";
@@ -632,7 +633,9 @@ try {
   await checkUsageMeters(browser, origin);
   await checkNotificationStartup(browser, origin, paneA, paneB);
   await checkMobileViewport(browser, origin, paneB);
-  await checkMobileTabs(browser, origin);
+  await checkMobileSlide(browser, origin);
+  await checkMobileShell(browser, origin);
+  await checkMobileShellDesktop(browser, origin, paneA);
   await checkDefaultView(browser, origin);
   await checkComposerReconnect(browser, origin, paneB);
   await checkDroplet(browser, origin);
@@ -1255,21 +1258,17 @@ try {
   await tabName.fill("build");
   await page.keyboard.press("Enter");
   await until(async () => (await tabsInHerdr()).join() === "first,build", "the menu's rename reaches herdr");
-  // on a touch screen the open tab carries a chevron in place of the x: the same menu, as a sheet
+  // on a phone the tab strip is gone: the slide bar names the workspace, and tab power
+  // use (rename, close) stays on the desktop
   const tabPhone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const tabPhonePage = await tabPhone.newPage();
   tabPhonePage.on("pageerror", (error) => errors.push(error.message));
   await tabPhonePage.goto(`${origin}/?pane=${encodeURIComponent(createdTab.pane_id)}`);
-  const phoneStrip = tabPhonePage.locator(".tab-strip");
-  await phoneStrip.getByRole("tab", { name: "build", exact: true, selected: true }).waitFor();
-  assert.equal(await phoneStrip.locator(".tab-strip-close:visible").count(), 0, "no x under a finger");
-  assert.equal(await phoneStrip.locator(".tab-strip-panes:visible").count(), 1, "only the open tab has the chevron");
-  await phoneStrip.getByRole("button", { name: "Actions for build", exact: true }).tap();
-  const tabSheet = tabPhonePage.getByRole("dialog", { name: "build", exact: true });
-  await tabSheet.waitFor();
-  assert.deepEqual(await tabSheet.locator(".row-sheet-item").allTextContents(), ["Rename tab", "Close tab"]);
-  await tabSheet.getByRole("button", { name: "Cancel", exact: true }).tap();
-  await tabSheet.waitFor({ state: "detached" });
+  await tabPhonePage.locator(".conn-live").waitFor();
+  assert.equal(await tabPhonePage.locator(".tab-strip").count(), 0, "no tab strip on a phone");
+  const phonePill = tabPhonePage.locator(".slide-bar").getByRole("tab", { name: "herdr-web-ui-test-browser-created", exact: true });
+  await phonePill.waitFor();
+  assert.equal(await phonePill.getAttribute("aria-selected"), "true", "the slide bar names the workspace");
   await tabPhone.close();
   // a tab whose agent is at work asks before it closes; a no leaves it
   await herdrRpc("pane.report_agent", { pane_id: createdTab.pane_id, source: "manual", agent: "codex", state: "working" });
@@ -1457,9 +1456,9 @@ try {
   mobilePage.on("pageerror", (error) => errors.push(error.message));
   await mobilePage.goto(`${origin}/?pane=${encodeURIComponent(paneB)}`);
   await mobilePage.locator(".conn-live").waitFor();
-  const tapHighlight = await mobilePage.locator(".view-switch button").first().evaluate((node) => getComputedStyle(node).webkitTapHighlightColor);
+  const tapHighlight = await mobilePage.locator(".mobile-topbar .header-more-button").evaluate((node) => getComputedStyle(node).webkitTapHighlightColor);
   assert.equal(tapHighlight, "rgba(0, 0, 0, 0)", "native tap overlays do not obscure selection");
-  await mobilePage.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+  // the split shows the composer with no lens switch
   await mobilePage.getByRole("textbox", { name: "Message", exact: true }).fill("mobile draft");
   await mobilePage.locator(".chat-terminal-fallback").waitFor();
   assert.equal(await mobilePage.locator(".chat-terminal-fallback").getAttribute("open"), null, "missing native history is labeled, not presented as broken chat");
@@ -1473,23 +1472,19 @@ try {
   console.log("PASS mobile composer with unavailable storage and no horizontal overflow");
 
   // a phone reads a pane before it answers: a pane picked from the drawer raises no keyboard,
-  // and a tap on the message box does
+  // and a tap on the message box does (the split shows both boxes, so there is no lens to switch)
   const typing = (target: typeof mobilePage) => target.evaluate(() => document.activeElement?.matches("textarea, input, [contenteditable]") ?? false);
   await mobilePage.getByRole("textbox", { name: "Message", exact: true }).blur();
-  await mobilePage.locator('button[aria-controls="workspace-drawer"]').click();
+  await runMoreItem(mobilePage, "Open workspace list");
   await mobilePage.locator(`.pane-select[title^="${paneA} —"]`).click();
   await mobilePage.getByRole("textbox", { name: "Message", exact: true }).waitFor();
   await mobilePage.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await mobilePage.waitForTimeout(NO_SEND_WAIT_MS);
   assert.equal(await typing(mobilePage), false, "a pane picked on a phone does not take the keyboard");
-  await mobilePage.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click();
-  await mobilePage.waitForTimeout(NO_SEND_WAIT_MS);
-  assert.equal(await typing(mobilePage), false, "nor does switching its lens");
-  await mobilePage.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
   await mobilePage.getByRole("textbox", { name: "Message", exact: true }).tap();
   await until(() => typing(mobilePage), "a tap on the message box takes the keyboard");
   await mobilePage.getByRole("textbox", { name: "Message", exact: true }).blur();
-  await mobilePage.locator('button[aria-controls="workspace-drawer"]').click();
+  await runMoreItem(mobilePage, "Open workspace list");
   assert.equal(await mobilePage.locator(".agents-sidebar .agent-section-toggle").getAttribute("aria-expanded"), "false", "a phone's drawer opens with Agents folded");
   await mobilePage.locator(`.pane-select[title^="${paneB} —"]`).click();
   await mobilePage.getByRole("textbox", { name: "Message", exact: true }).waitFor();
@@ -1513,7 +1508,6 @@ try {
   await plainPage.route(promptRoute, (route) => route.fulfill(suggest));
   await plainPage.goto(`${origin}/?pane=${encodeURIComponent(paneB)}`);
   await plainPage.locator(".conn-live").waitFor();
-  await plainPage.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
   const plainComposer = plainPage.getByRole("textbox", { name: "Message", exact: true });
   await until(async () => await plainComposer.getAttribute("placeholder") === "run the tests", "the suggestion stays the placeholder with the chip off");
   assert.equal(await plainPage.getByTitle("Use the suggestion", { exact: true }).count(), 0, "no suggestion chip once Settings turns it off");
@@ -1534,7 +1528,7 @@ try {
   }));
   await touchPage.goto(`${origin}/?pane=${encodeURIComponent(paneB)}`);
   await touchPage.locator(".conn-live").waitFor();
-  await touchPage.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click();
+  // the split shows the terminal box with no lens switch: the input line is already there
   const line = touchPage.getByRole("textbox", { name: "Terminal input line", exact: true });
   await line.waitFor();
   assert.equal(await touchPage.locator(".xterm-helper-textarea").getAttribute("inputmode"), "none");

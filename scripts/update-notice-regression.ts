@@ -5,9 +5,9 @@ import type { Machine } from "../shared/machines.ts";
 import type { UpdateStatus } from "../shared/update.ts";
 
 /**
- * The lines under the header, on a phone: a release is installed from its line with one button
- * and shows its steps, and the line for a PC that needs a bridge update can be closed for good.
- * The update status and the waiting PC are answered here; nothing is installed.
+ * The notices in the phone's ⋯ sheet: a release installs from its line with one button
+ * and shows its steps, and the line for a PC that needs a bridge update can be closed
+ * for good. The update status and the waiting PC are answered here; nothing is installed.
  */
 export async function checkUpdateNotice(browser: Browser, origin: string, shots?: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: "en-US" });
@@ -50,13 +50,21 @@ export async function checkUpdateNotice(browser: Browser, origin: string, shots?
     await page.goto(origin);
     const notice = page.locator(".update-notice").filter({ hasText: /herdr web ui|update|Step|Starting/i }).first();
     const fits = async (label: string) => assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `${label}: nothing overflows sideways`);
+    // on a phone the notices hold no rows: an update on offer dots the ⋯ menu, and its
+    // line lives at the top of the sheet it opens
+    const sheet = page.locator(".row-sheet");
+    const openSheet = async (): Promise<void> => {
+      if ((await sheet.count()) === 0) await page.locator(".mobile-topbar .header-more-button").click();
+      await sheet.waitFor();
+    };
+    await page.locator(".conn-live").waitFor();
+    assert.equal(await page.locator(".pane-column > .update-notice").count(), 0, "no notice holds a row on a phone");
+    assert.equal(await page.locator(".mobile-menu-dot").count(), 1, "an update on offer dots the menu");
 
     // one button, and no detour through Settings
+    await openSheet();
     await page.getByText("herdr web ui v9.9.9 is available.", { exact: true }).waitFor();
     assert.equal(await page.getByRole("button", { name: "View update", exact: true }).count(), 0, "the line has no View update button");
-    // the line is the pane column's, never a bar across the window between the header and the sidebar
-    assert.ok(await page.locator(".pane-column > .update-notice").count() > 0, "the notice is drawn in the pane column");
-    assert.equal(await page.locator(":not(.pane-column) > .update-notice").count(), 0, "and nowhere else");
     await fits("available");
     await shot("1-available");
     await page.getByRole("button", { name: "Update", exact: true }).click();
@@ -81,6 +89,8 @@ export async function checkUpdateNotice(browser: Browser, origin: string, shots?
     await page.getByRole("button", { name: "Details", exact: true }).click();
     await page.getByRole("dialog", { name: "Settings" }).getByText("bun run build failed: fixture").waitFor();
     await page.getByRole("button", { name: "Close settings", exact: true }).click();
+    // Details opened Settings over the sheet: the sheet went with it
+    await openSheet();
     await page.getByRole("button", { name: "Try again", exact: true }).click();
     await page.getByText("Starting the update…", { exact: true }).waitFor();
     assert.equal(installs, 2, "Try again asks for the install again");
@@ -94,13 +104,14 @@ export async function checkUpdateNotice(browser: Browser, origin: string, shots?
     assert.deepEqual([checks, installs], [1, 2], "Try again after a failed check asks for a check, not an install");
     status = { ...status, phase: "idle", available: false, error: null };
     await page.getByText("herdr web ui v9.9.9 is available.", { exact: true }).waitFor({ state: "hidden" });
-    assert.equal(await page.locator(".update-notice").count(), 0, "an installed update leaves no line");
-    console.log("PASS a release installs from its line with one button and shows its steps");
+    assert.equal(await page.locator(".mobile-menu-dot").count(), 0, "an installed update leaves no dot");
+    console.log("PASS a release installs from its sheet line with one button and shows its steps");
 
     // a PC whose bridge cannot be updated: its line closes, and stays closed
     const line = page.getByText("QA PC needs a bridge update to reconnect.", { exact: true });
     const dismissed = () => page.evaluate(() => localStorage.getItem("herdr-web-ui:pc-notice-dismissed"));
     remote = pc;
+    await openSheet();
     await line.waitFor();
     await fits("bridge update needed");
     await shot("4-bridge-update-needed");
@@ -114,6 +125,7 @@ export async function checkUpdateNotice(browser: Browser, origin: string, shots?
     remote = pc;
     await page.reload();
     await page.locator(".conn-live").waitFor();
+    await openSheet();
     assert.equal(await line.count(), 0, "the closed line stays closed through a failed retry and a reload");
     assert.equal(await dismissed(), JSON.stringify(["qa-pc:update_bridge"]));
     await shot("5-bridge-line-closed");
@@ -121,6 +133,7 @@ export async function checkUpdateNotice(browser: Browser, origin: string, shots?
     remote = { ...pc, state: "connected", action_required: null };
     await page.waitForFunction(() => localStorage.getItem("herdr-web-ui:pc-notice-dismissed") === null);
     remote = pc;
+    await openSheet();
     await line.waitFor();
     assert.deepEqual(errors, []);
     console.log("PASS the line for a PC that needs a bridge update closes and stays closed until the PC connects");
