@@ -79,7 +79,7 @@ export function RowMenu({ anchor, title, subtitle, header, items, align = "end",
   }, [align, anchor, onClose, sheet]);
 
   useEffect(() => {
-    const first = surface.current?.querySelector<HTMLElement>(sheet ? SHEET_ITEMS : POPOVER_ITEMS);
+    const first = surface.current?.querySelector<HTMLElement>(sheet ? '.row-sheet-item' : '[role="menuitem"], [role="menuitemcheckbox"]');
     window.requestAnimationFrame(() => first?.focus());
   }, [sheet]);
 
