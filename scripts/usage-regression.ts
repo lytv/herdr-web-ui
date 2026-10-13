@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { Browser, BrowserContext } from "playwright-core";
 import type { UsageReport } from "../shared/protocol.ts";
 import { openSettingsPage } from "./settings-page.ts";
+import { runMoreItem } from "./header-more.ts";
 
 const at = (hours: number): string => new Date(Date.now() + hours * 3600_000).toISOString();
 const REPORT: UsageReport = {
@@ -139,7 +140,9 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
     await phone.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ showUsage: true })));
     const page = await phone.newPage();
     await page.goto(origin);
-    await page.getByRole("button", { name: "Open workspace list", exact: true }).click();
+    // the app opens its first pane by itself, so a phone is on the mobile shell here:
+    // its drawer opens from the ⋯ sheet, not a header toggle
+    await runMoreItem(page, "Open workspace list");
     await page.locator(".usage-strip").click();
     const popover = page.getByRole("dialog", { name: "Subscription usage", exact: true });
     await popover.waitFor();

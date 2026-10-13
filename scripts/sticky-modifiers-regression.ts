@@ -232,10 +232,14 @@ try {
     await keyBarSettings.getByRole("button", { name: "Close settings", exact: true }).tap();
     previousMask = 0;
     assert.equal(await page.locator('[data-key="Alt"]').getAttribute("aria-pressed"), "false");
-    // Leaving the terminal lens clears held state on the same pane.
-    await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).tap();
-    await page.getByTitle("Live terminal (⌘⇧J)", { exact: true }).tap();
-    await until(async () => !(await ctrl.isDisabled()), "terminal lens ready again");
+    // Leaving the pane clears held state on return. The split has no lens to leave, so the
+    // slide bar's session switch stands in for the lens switch.
+    const neighbor = await workspaceCreate({ cwd: root, label: `herdr-web-ui-test-sticky-${mode}-other`, focus: false });
+    owned.push(neighbor.workspace.workspace_id);
+    const bar = page.locator(".slide-bar");
+    await bar.getByRole("tab", { name: `herdr-web-ui-test-sticky-${mode}-other`, exact: true }).click();
+    await bar.getByRole("tab", { name: `herdr-web-ui-test-sticky-${mode}`, exact: true }).click();
+    await until(async () => !(await ctrl.isDisabled()), "pane ready again after the switch");
     for (const key of ["Control", "Alt", "Shift"]) assert.equal(await page.locator(`[data-key="${key}"]`).getAttribute("aria-pressed"), "false");
     previousMask = 0;
     // A cancelled chord or text says so in a banner. The banner column lets taps through to the

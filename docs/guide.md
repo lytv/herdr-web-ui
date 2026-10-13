@@ -241,8 +241,15 @@ Only devices in your tailnet can open that address. Your own devices get in with
 To check alerts later, choose **Settings → Alerts → Send test**. The result tells you
 whether the test was sent or failed; a missing subscription offers **Turn alerts on again**.
 
-On a phone:
-- Agent panes open in the chat.
+On a phone with a pane selected, the view is a slim top bar (connection dot, title plus one-line
+crumb, ⋯ menu) over a slide bar of workspace pills with status dots and a new-workspace entry,
+over a vertical split: the message box (transcript plus composer) on top, the live terminal plus
+touch key row below. Tap a box's Expand to fill the view and Collapse to restore the split,
+and only one box expands at a time. Update and PC notices appear at the top of the ⋯ sheet with
+a dot on its button, never as holding rows. The drawer tree, palette, files, find and settings stay
+reachable from that sheet as full overlays.
+
+- Agent panes show chat and terminal together in the split, not one lens alone.
 - The terminal gets a key bar above the keyboard (Esc, Tab, Ctrl, Alt, Shift, Enter, arrows, Ctrl+C).
   Ctrl, Alt and Shift stay held until tapped again and combine with each other.
   Enable direct terminal typing with the keyboard button to use them with letters and

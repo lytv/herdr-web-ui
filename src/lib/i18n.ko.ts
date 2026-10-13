@@ -135,6 +135,8 @@ export const KO: Record<string, string> = {
   "Off on this device": "이 기기에서 꺼짐",
   "More": "더 보기",
   "More · alerts are off": "더 보기 · 알림 꺼짐",
+  "More · notices": "더 보기 · 안내",
+  "More · notices · alerts are off": "더 보기 · 안내 · 알림 꺼짐",
   "Alerts off on this device — tap to turn them on": "이 기기에서 알림이 꺼져 있습니다. 누르면 켜집니다",
   "On in this tab": "이 탭에서 켜짐",
   "Alerts on while this tab is open. Tap to turn them off": "이 탭이 열려 있는 동안 알림이 옵니다. 누르면 꺼집니다",

@@ -37,6 +37,7 @@ import {
 } from "../lib/compose.ts";
 import { modelLabel } from "../lib/modelName.ts";
 import { useFacesArrived } from "../lib/fontFaces.ts";
+import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { activeTrigger, applyCompletion, type ActiveTrigger } from "../lib/mentions.ts";
 import { quickReplyButtons, useSettings } from "../lib/settings.ts";
 import { composerUsage, formatPercent, formatResetIn, HIGH_PERCENT, meterPercent, meterText, providerForAgent, statusWindows, usageName, useUsage, windowLabel } from "../lib/usage.ts";
@@ -188,19 +189,6 @@ function ContextRing({ context, shown, readOnly = false, onToggle }: { context: 
       {shown && <span className="composer-context-text">{label}</span>}
     </button>
   );
-}
-
-function useMediaQuery(query: string): boolean {
-  const [matches, setMatches] = useState(() => window.matchMedia?.(query).matches === true);
-  useEffect(() => {
-    const media = window.matchMedia?.(query);
-    if (!media) return;
-    const refresh = () => setMatches(media.matches);
-    refresh();
-    media.addEventListener("change", refresh);
-    return () => media.removeEventListener("change", refresh);
-  }, [query]);
-  return matches;
 }
 
 /** Chat-style input surface with pane-local drafts, command/file completion, and image mentions. */

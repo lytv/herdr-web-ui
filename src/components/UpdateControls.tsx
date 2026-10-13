@@ -144,7 +144,11 @@ export function HerdrUpdateControls({ enabled, herdrVersion }: { enabled: boolea
  * install to the reload, then tells of the update once the new version runs. Settings is
  * where its notes and a failure are read in full.
  */
-export function UpdateNotice({ updates, onOpen }: { updates: UpdatesModel; onOpen: () => void }) {
+export function UpdateNotice(props: { updates: UpdatesModel; onOpen: () => void }) {
+  return useUpdateNotice(props);
+}
+
+export function useUpdateNotice({ updates, onOpen }: { updates: UpdatesModel; onOpen: () => void }) {
   const t = useT();
   const { status, error, busy, needsReload, notes, installed, request } = updates;
   // the version whose line this device closed: opening its notes closes it too, in every tab

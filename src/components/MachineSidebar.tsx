@@ -155,7 +155,11 @@ function MachineActionNotice({ machine, onSetup }: { machine: Machine; onSetup(m
 }
 
 /** The app-wide line for PCs that wait on the user, so a closed drawer on a phone still says so. */
-export function MachineActionBanner({ machines, onSetup }: { machines: Machine[]; onSetup(machine: Machine, update?: boolean): void }) {
+export function MachineActionBanner(props: { machines: Machine[]; onSetup(machine: Machine, update?: boolean): void }) {
+  return useMachineActionBanner(props);
+}
+
+export function useMachineActionBanner({ machines, onSetup }: { machines: Machine[]; onSetup(machine: Machine, update?: boolean): void }) {
   const t = useT();
   // a PC that cannot be updated right now would hold this line open for good: it can be closed,
   // and the PC's own row in the sidebar keeps saying what it needs

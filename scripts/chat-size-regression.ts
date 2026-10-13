@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Browser, BrowserContext, Page } from "playwright-core";
 import type { Machine } from "../shared/machines.ts";
-import { herdrRpc, paneRead, paneSendKeys, paneSendText, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
+import { openSettingsPage } from "./settings-page.ts";
+import { herdrRpc, paneRead, paneScrollInfo, paneSendKeys, paneSendText, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 
 /** how long a resize that should not happen gets to show up */
 const NO_RESIZE_WAIT_MS = 400;
@@ -40,9 +41,16 @@ async function openRecording(browser: Browser, contexts: BrowserContext[], origi
     const frames: { dir: "in" | "out"; type: string; keep_size?: boolean }[] = [];
     (window as unknown as { frames_: typeof frames }).frames_ = frames;
     const Native = window.WebSocket;
+    const sockets: WebSocket[] = [];
+    Object.assign(window, { sockets_: sockets });
+    const viewport = window.visualViewport!;
+    let height: number | null = null;
+    Object.defineProperty(viewport, "height", { get: () => height ?? window.innerHeight });
+    Object.assign(window, { keyboardQA: (value: number | null) => { height = value; viewport.dispatchEvent(new Event("resize")); } });
     class Recording extends Native {
       constructor(url: string | URL, protocols?: string | string[]) {
         super(url, protocols);
+        sockets.push(this);
         this.addEventListener("message", (event) => { try { frames.push({ dir: "in", type: JSON.parse(String(event.data)).type }); } catch {} });
       }
       override send(data: string): void { try { const frame = JSON.parse(data); frames.push({ dir: "out", type: frame.type, keep_size: frame.keep_size }); } catch {} super.send(data); }
@@ -74,12 +82,17 @@ async function agentListed(origin: string, paneId: string): Promise<void> {
 // `nth` one is in, that attach has done whatever it does to the grid
 const attached = (page: Page, nth = 1) => page.waitForFunction((count) => (window as unknown as { frames_: { dir: string; type: string }[] }).frames_.filter((f) => f.dir === "in" && f.type === "input-ready").length >= count, nth, { timeout: 15_000 });
 
-/**
- * The chat lens leaves the shared terminal's size alone (#361): a desktop tab drives a pane's grid
- * from its terminal lens, a phone opens the same pane in the chat lens, and the program in the pane
- * still sees the desktop's size. Switching the phone to its terminal lens fits the grid to the phone.
- * The size is the one the pane's own shell reports (`stty size`), not what either browser thinks.
- */
+async function dragTerminal(page: Page, dx: number, dy: number): Promise<{ x: number; y: number }> {
+  return page.locator(".pane-terminal").evaluate((host, { dx, dy }) => {
+    const rect = host.getBoundingClientRect();
+    const touch = (x: number, y: number) => new Touch({ identifier: 1, target: host, clientX: rect.left + 180 + x, clientY: rect.top + 50 + y });
+    host.dispatchEvent(new TouchEvent("touchstart", { touches: [touch(0, 0)], bubbles: true }));
+    host.dispatchEvent(new TouchEvent("touchmove", { touches: [touch(dx, dy)], bubbles: true, cancelable: true }));
+    host.dispatchEvent(new TouchEvent("touchend", { touches: [], bubbles: true }));
+    return { x: host.scrollLeft, y: host.scrollTop };
+  }, { dx, dy });
+}
+
 export async function checkChatKeepsTerminalSize(browser: Browser, origin: string): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-chat-size-"));
   const cwd = join(root, "pane");
@@ -93,45 +106,164 @@ export async function checkChatKeepsTerminalSize(browser: Browser, origin: strin
     await agentListed(origin, paneId);
     const size = shellSize(paneId);
     const open = (options: Parameters<Browser["newContext"]>[0], settings: object) => openRecording(browser, contexts, origin, paneId, options, settings);
-    const sent = (page: Page) => page.evaluate(() => (window as unknown as { frames_: { dir: string; type: string; keep_size?: boolean }[] }).frames_.filter((f) => f.dir === "out" && (f.type === "attach" || f.type === "resize")));
 
     const desktop = await open({ viewport: { width: 1280, height: 800 } }, { language: "en", defaultView: "terminal" });
     await attached(desktop);
     const desktopSize = await size();
 
     const phone = await open({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true }, { language: "en", defaultView: "chat" });
-    await phone.locator(".terminal-stack.is-chat").waitFor({ state: "attached" });
+    await phone.locator(".terminal-stack.is-split").waitFor({ state: "attached" });
     await attached(phone);
-    // the chat lens attaches without driving the grid, and sends no resize of its own
-    assert.deepEqual(await sent(phone), [{ dir: "out", type: "attach", keep_size: true }]);
-    assert.equal(await size(), desktopSize, "the phone's chat lens leaves the desktop's grid");
+    const unchanged = async () => {
+      await Bun.sleep(NO_RESIZE_WAIT_MS);
+      const sent = (await framesOf(phone)).filter((f) => f.dir === "out" && (f.type === "attach" || f.type === "resize"));
+      assert.ok(sent.length > 0 && sent.every((f) => f.type === "attach" && f.keep_size === true), "the phone only attaches with keep_size and never sends resize");
+      assert.equal(await size(), desktopSize, "the phone leaves the desktop's shared grid unchanged");
+      assert.equal(await phone.locator(".pane-terminal .xterm-rows > div").count(), Number(desktopSize.split(" ")[0]), "the phone draws the adopted grid");
+    };
+    await unchanged();
+    await phone.locator(".pane-terminal").evaluate((host) => { host.scrollTop = 0; host.scrollLeft = 0; });
+    const pan = await dragTerminal(phone, -100, -100);
+    assert.ok(pan.x > 0 && pan.y > 0, "a touch drag pans the adopted grid on both axes");
+    await phone.evaluate(() => document.fonts.ready);
+    const overflow = await phone.locator(".pane-terminal").evaluate((host) => ({ x: host.scrollWidth > host.clientWidth, y: host.scrollHeight > host.clientHeight }));
+    assert.deepEqual(overflow, { x: true, y: true }, "the default split box overflows on both axes with a desktop-sized grid");
+    await paneSendText(paneId, "i=1; while [ $i -le 200 ]; do printf 'split-history-%03d\\n' \"$i\"; i=$((i+1)); done");
+    await paneSendKeys(paneId, ["Enter"]);
+    await phone.waitForFunction(() => document.querySelector(".xterm-rows")!.textContent!.includes("split-history-200"));
+    const firstSplit = await phone.locator(".xterm-rows").evaluate((rows) => Number(rows.textContent!.match(/split-history-(\d+)/)![1]));
+    await phone.locator(".pane-terminal").evaluate((host) => { host.scrollTop = 50; host.scrollLeft = 50; });
+    const beforePan = (await framesOf(phone)).length;
+    assert.deepEqual(await dragTerminal(phone, -20, 20), { x: 70, y: 30 }, "movement inside the grid pans without scrolling history");
+    assert.equal((await framesOf(phone)).slice(beforePan).filter((f) => f.dir === "out" && f.type === "input").length, 0);
+    assert.equal((await paneScrollInfo(paneId))!.offset_from_bottom, 0);
+    const top = await dragTerminal(phone, -30, 100);
+    assert.deepEqual(top, { x: 100, y: 0 }, "an overshooting diagonal drag reaches the top edge while panning horizontally");
+    await phone.waitForFunction((first) => Number(document.querySelector(".xterm-rows")!.textContent!.match(/split-history-(\d+)/)?.[1]) < first, firstSplit);
+    const older = await phone.locator(".xterm-rows").evaluate((rows) => Number(rows.textContent!.match(/split-history-(\d+)/)![1]));
+    const topOffset = (await paneScrollInfo(paneId))!.offset_from_bottom;
+    assert.ok(topOffset > 0, "movement beyond the top pan edge reaches earlier output");
+    const rightEdge = await phone.locator(".pane-terminal").evaluate((host) => {
+      host.scrollLeft = host.scrollWidth - host.clientWidth;
+      return host.scrollLeft;
+    });
+    assert.deepEqual(await dragTerminal(phone, -80, 40), { x: rightEdge, y: 0 }, "horizontal movement at the right edge does not block vertical history scrolling");
+    await phone.waitForFunction((first) => Number(document.querySelector(".xterm-rows")!.textContent!.match(/split-history-(\d+)/)?.[1]) < first, older);
+    const oldest = await phone.locator(".xterm-rows").evaluate((rows) => Number(rows.textContent!.match(/split-history-(\d+)/)![1]));
+    const edgeOffset = (await paneScrollInfo(paneId))!.offset_from_bottom;
+    assert.ok(edgeOffset > topOffset, "another drag at the top edge continues through herdr history");
+    const bottomEdge = await phone.locator(".pane-terminal").evaluate((host) => {
+      const bottom = host.scrollHeight - host.clientHeight;
+      host.scrollTop = bottom - 30;
+      host.scrollLeft = 100;
+      return bottom;
+    });
+    const bottom = await dragTerminal(phone, 30, -100);
+    assert.deepEqual(bottom, { x: 70, y: bottomEdge }, "the reverse diagonal drag reaches the bottom edge");
+    await phone.waitForFunction((first) => Number(document.querySelector(".xterm-rows")!.textContent!.match(/split-history-(\d+)/)?.[1]) > first, oldest);
+    assert.ok((await paneScrollInfo(paneId))!.offset_from_bottom < edgeOffset, "movement beyond the bottom pan edge scrolls toward newer output");
+    await phone.locator(".pane-terminal").evaluate((host) => { host.scrollLeft = 0; });
+    assert.deepEqual(await dragTerminal(phone, 80, -40), { x: 0, y: bottomEdge }, "horizontal movement at the left edge does not block vertical history scrolling");
+    await phone.waitForFunction((first) => Number(document.querySelector(".xterm-rows")!.textContent!.match(/split-history-(\d+)/)?.[1]) === first, firstSplit);
+    assert.equal((await paneScrollInfo(paneId))!.offset_from_bottom, 0, "another drag at the bottom edge returns to the latest output");
+    await unchanged();
+    console.log("PASS split-box drags pan within the adopted grid and scroll herdr history past both pan edges without resizing");
+    for (const name of ["Terminal", "Chat"]) {
+      await phone.getByRole("button", { name: `Expand ${name}`, exact: true }).tap();
+      await unchanged();
+      await phone.getByRole("button", { name: `Collapse ${name}`, exact: true }).tap();
+    }
+    await phone.getByRole("textbox", { name: "Message", exact: true }).tap();
+    await phone.evaluate(() => (window as unknown as { keyboardQA: (height: number | null) => void }).keyboardQA(480));
+    await phone.waitForFunction(() => Math.round(document.querySelector(".app")!.getBoundingClientRect().height) === 480);
+    await unchanged();
+    await phone.evaluate(() => {
+      (document.activeElement as HTMLElement | null)?.blur();
+      (window as unknown as { keyboardQA: (height: number | null) => void }).keyboardQA(null);
+      window.dispatchEvent(new Event("focus"));
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await phone.locator(".mobile-topbar .header-more-button").tap();
+    await phone.locator(".row-sheet").getByRole("button", { name: "Settings", exact: true }).tap();
+    await openSettingsPage(phone, "Terminal");
+    await phone.getByRole("button", { name: "Increase terminal font size", exact: true }).tap();
+    await phone.getByRole("button", { name: "Close settings", exact: true }).tap();
+    await unchanged();
+    for (const mode of ["observe", "interact"]) {
+      const before = (await framesOf(phone)).filter((f) => f.dir === "in" && f.type === "role-ack").length;
+      await phone.evaluate((mode) => (window as unknown as { sockets_: WebSocket[] }).sockets_.at(-1)!.send(JSON.stringify({ type: "role", mode })), mode);
+      await phone.waitForFunction((count) => (window as unknown as { frames_: Frame[] }).frames_.filter((f) => f.dir === "in" && f.type === "role-ack").length > count, before);
+      if (mode === "observe") {
+        await phone.locator(".pane-terminal").evaluate((host) => { host.scrollTop = 0; });
+        const beforeDrag = (await framesOf(phone)).length;
+        await dragTerminal(phone, 0, 100);
+        assert.equal((await framesOf(phone)).slice(beforeDrag).filter((f) => f.dir === "out" && f.type === "input").length, 0, "an observer at the pan edge sends no history input");
+      }
+      await unchanged();
+    }
+    const before = (await framesOf(phone)).filter((f) => f.dir === "in" && f.type === "input-ready").length;
+    await phone.evaluate(() => (window as unknown as { sockets_: WebSocket[] }).sockets_.at(-1)!.close());
+    await attached(phone, before + 1);
+    await unchanged();
     if (process.env.UI_EVIDENCE_DIR) await desktop.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "chat-size-desktop.png") });
-    console.log(`PASS a phone's chat lens leaves the shared grid at the desktop's ${desktopSize}`);
+    console.log(`PASS the phone preserves and pans the shared ${desktopSize} grid through expansion, keyboard, focus, fonts, roles and reconnect`);
 
-    // the phone's terminal lens fits the grid to the phone: the shell sees it change
-    // on a phone the lens switch shows no label: the button is known by its title
-    await phone.locator('button[title^="Live terminal"]').tap();
-    await phone.waitForFunction(() => (window as unknown as { frames_: { dir: string; type: string }[] }).frames_.some((f) => f.dir === "out" && f.type === "resize"), undefined, { timeout: 10_000 });
+    const other = await open({ viewport: { width: 900, height: 420 } }, { language: "en", defaultView: "terminal" });
+    await attached(other);
+    await other.locator(".terminal-stack:not(.is-chat)").waitFor();
+    await other.waitForFunction(() => (window as unknown as { frames_: Frame[] }).frames_.some((f) => f.dir === "out" && f.type === "resize"));
     const deadline = Date.now() + 10_000;
-    let phoneSize = desktopSize;
-    while (phoneSize === desktopSize && Date.now() < deadline) phoneSize = await size();
-    assert.notEqual(phoneSize, desktopSize, "the phone's terminal lens fits the grid to the phone");
-    assert.ok(Number(phoneSize.split(" ")[1]) < Number(desktopSize.split(" ")[1]), `phone ${phoneSize} narrower than desktop ${desktopSize}`);
-    console.log(`PASS the phone's terminal lens fits the grid to ${phoneSize}`);
-
-    // the desktop's terminal lens ignored that resize: it drives the grid itself. Entering the chat
-    // lens, its hidden screen takes the grid the pty has now, since what the chat reads there (a
-    // masked prompt) is drawn for the phone's grid. xterm's DOM renderer keeps one element a row.
+    let otherSize = await size();
+    while (otherSize === desktopSize && Date.now() < deadline) {
+      await Bun.sleep(50);
+      otherSize = await size();
+    }
+    assert.notEqual(otherSize, desktopSize, "a desktop terminal lens still drives the shared grid");
     const hiddenRows = () => desktop.locator(".pane-terminal .xterm-rows > div").count();
-    const phoneRows = Number(phoneSize.split(" ")[0]);
-    assert.notEqual(await hiddenRows(), phoneRows, "the desktop's terminal lens kept its own grid");
+    const otherRows = Number(otherSize.split(" ")[0]);
+    assert.notEqual(await hiddenRows(), otherRows, "the desktop's terminal lens kept its own grid");
     await desktop.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
     await desktop.locator(".terminal-stack.is-chat").waitFor({ state: "attached" });
-    const adopted = Date.now() + 10_000;
-    while (await hiddenRows() !== phoneRows && Date.now() < adopted) await Bun.sleep(100);
-    assert.equal(await hiddenRows(), phoneRows, "the desktop's chat lens draws its hidden screen for the shared grid");
-    assert.equal(await size(), phoneSize, "entering the chat lens resizes nothing");
-    console.log(`PASS the desktop's chat lens draws its hidden screen for the shared grid of ${phoneSize}`);
+    await desktop.waitForFunction((rows) => document.querySelectorAll(".pane-terminal .xterm-rows > div").length === rows, otherRows);
+    assert.equal(await size(), otherSize, "entering the chat lens resizes nothing");
+    await phone.waitForFunction((rows) => document.querySelectorAll(".pane-terminal .xterm-rows > div").length === rows, otherRows);
+    console.log(`PASS the desktop's chat lens and phone adopt the shared grid of ${otherSize}`);
+
+    await phone.getByRole("button", { name: "Expand Terminal", exact: true }).tap();
+    await phone.waitForFunction(() => {
+      const host = document.querySelector(".pane-terminal")!;
+      return host.scrollWidth > host.clientWidth && host.scrollHeight <= host.clientHeight;
+    });
+    await paneSendText(paneId, "i=1; while [ $i -le 200 ]; do printf 'touch-history-%03d\\n' \"$i\"; i=$((i+1)); done");
+    await paneSendKeys(paneId, ["Enter"]);
+    await phone.waitForFunction(() => document.querySelector(".xterm-rows")!.textContent!.includes("touch-history-200"));
+    const first = await phone.locator(".xterm-rows").evaluate((rows) => Number(rows.textContent!.match(/touch-history-(\d+)/)![1]));
+    const left = await phone.locator(".pane-terminal").evaluate((host) => host.scrollLeft);
+    const moved = await dragTerminal(phone, -80, 100);
+    assert.ok(moved.x > left && moved.y === 0, "a mixed-axis drag pans only the overflowing horizontal axis");
+    await phone.waitForFunction((first) => Number(document.querySelector(".xterm-rows")!.textContent!.match(/touch-history-(\d+)/)?.[1]) < first, first);
+    assert.ok((await paneScrollInfo(paneId))!.offset_from_bottom > 0, "the vertical touch drag reaches earlier shell output in herdr");
+    await dragTerminal(phone, 80, -100);
+    await phone.waitForFunction((first) => Number(document.querySelector(".xterm-rows")!.textContent!.match(/touch-history-(\d+)/)?.[1]) === first, first);
+    assert.equal((await paneScrollInfo(paneId))!.offset_from_bottom, 0, "the reverse touch drag returns to the latest shell output");
+    assert.equal(await size(), otherSize, "touch history scrolling never changes the shared terminal size");
+    assert.equal((await framesOf(phone)).filter((f) => f.dir === "out" && f.type === "resize").length, 0);
+    console.log("PASS touch drags pan an overflowing axis and scroll earlier shell output on the fitting axis");
+
+    const narrow = await open({ viewport: { width: 700, height: 844 } }, { language: "en", defaultView: "terminal" });
+    await attached(narrow);
+    await narrow.waitForFunction(() => document.querySelector(".xterm-rows")!.textContent!.includes("touch-history-200"));
+    const narrowFirst = await narrow.locator(".xterm-rows").evaluate((rows) => Number(rows.textContent!.match(/touch-history-(\d+)/)![1]));
+    await narrow.locator(".pane-terminal").hover();
+    await narrow.mouse.wheel(0, -100);
+    await narrow.waitForFunction((first) => Number(document.querySelector(".xterm-rows")!.textContent!.match(/touch-history-(\d+)/)?.[1]) < first, narrowFirst);
+    assert.ok((await paneScrollInfo(paneId))!.offset_from_bottom > 0, "the wheel still scrolls herdr history in a narrow desktop window");
+    await narrow.mouse.wheel(0, 100);
+    await narrow.waitForFunction((first) => Number(document.querySelector(".xterm-rows")!.textContent!.match(/touch-history-(\d+)/)?.[1]) === first, narrowFirst);
+    assert.equal((await paneScrollInfo(paneId))!.offset_from_bottom, 0);
+    assert.equal(await size(), otherSize, "a narrow desktop viewer keeps the shared terminal size");
+    assert.equal((await framesOf(narrow)).filter((f) => f.dir === "out" && f.type === "resize").length, 0);
+    console.log("PASS narrow desktop wheels scroll herdr history in both directions without resizing");
   } finally {
     for (const context of contexts) await context.close();
     await workspaceClose(created.workspace.workspace_id).catch(() => undefined);
@@ -171,6 +303,23 @@ export async function checkPaneSwitchKeepsTerminalSize(browser: Browser, origin:
     const other = await openRecording(browser, contexts, origin, shellPane, { viewport: { width: 900, height: 600 } }, { language: "en", defaultView: "chat" });
     await other.locator(".terminal-stack:not(.is-chat)").waitFor({ state: "attached" });
     await attached(other);
+    const shell = shellSize(shellPane);
+    const shellGrid = await shell();
+    const phone = await openRecording(browser, contexts, origin, shellPane, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true }, { language: "en", defaultView: "terminal" });
+    await attached(phone);
+    await Bun.sleep(NO_RESIZE_WAIT_MS);
+    assert.equal(await shell(), shellGrid, "opening a shell on a phone preserves its shared grid");
+    let attaches = 1;
+    for (const name of ["agent", "shell", "agent"]) {
+      await phone.locator(".slide-bar").getByRole("tab", { name: `herdr-web-ui-test-chat-switch-${name}`, exact: true }).tap();
+      await attached(phone, ++attaches);
+      await Bun.sleep(NO_RESIZE_WAIT_MS);
+      const sent = (await framesOf(phone)).filter((f) => f.dir === "out" && (f.type === "attach" || f.type === "resize"));
+      assert.ok(sent.length > 0 && sent.every((f) => f.type === "attach" && f.keep_size === true), "each slide-bar pane switch preserves the shared grid");
+      assert.equal(await size(), desktopSize);
+      assert.equal(await shell(), shellGrid);
+    }
+    console.log("PASS a terminal-lens phone preserves shell and agent grids on slide-bar pane switches");
     const before = (await framesOf(other)).length;
     await other.locator(`.pane-select[title^="${agentPane} — "]`).click();
     await other.locator(".terminal-stack.is-chat").waitFor({ state: "attached" });
@@ -181,6 +330,23 @@ export async function checkPaneSwitchKeepsTerminalSize(browser: Browser, origin:
     assert.deepEqual(sent, [{ dir: "out", type: "attach", keep_size: true }], "the picked pane attaches in its own lens");
     assert.equal(await size(), desktopSize, "picking a chat-lens pane leaves the desktop's grid");
     console.log(`PASS picking a chat-lens pane from a terminal-lens pane leaves the shared grid at ${desktopSize}`);
+    const wideStart = (await framesOf(phone)).length;
+    await phone.setViewportSize({ width: 900, height: 600 });
+    await phone.waitForFunction((start) => (window as unknown as { frames_: Frame[] }).frames_.slice(start).some((f) => f.dir === "out" && f.type === "resize"), wideStart);
+    const deadline = Date.now() + 10_000;
+    let wideGrid = await size();
+    while (wideGrid === desktopSize && Date.now() < deadline) {
+      await Bun.sleep(50);
+      wideGrid = await size();
+    }
+    assert.notEqual(wideGrid, desktopSize, "crossing to desktop width restores terminal-size ownership");
+    const narrowStart = (await framesOf(phone)).length;
+    await phone.setViewportSize({ width: 390, height: 844 });
+    await phone.locator(".terminal-stack.is-split").waitFor();
+    await Bun.sleep(NO_RESIZE_WAIT_MS);
+    assert.equal((await framesOf(phone)).slice(narrowStart).filter((f) => f.dir === "out" && f.type === "resize").length, 0, "crossing back to phone width sends no resize");
+    assert.equal(await size(), wideGrid, "the phone adopts the desktop grid after the breakpoint change");
+    console.log("PASS crossing the breakpoint restores desktop size ownership and then phone adoption");
   } finally {
     for (const context of contexts) await context.close();
     for (const id of workspaces) await workspaceClose(id).catch(() => undefined);

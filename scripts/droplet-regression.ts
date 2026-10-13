@@ -33,6 +33,8 @@ export async function checkDroplet(browser: Browser, origin: string): Promise<vo
       if (localStorage.getItem("herdr-web-ui:settings") === null) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", alertDone: "off" }));
     });
     const page = await context.newPage();
+    const cdp = await context.newCDPSession(page);
+    await cdp.send("Emulation.setSafeAreaInsetsOverride", { insets: { top: 47, left: 12, right: 20 } });
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
     await page.goto(`${origin}/?pane=${encodeURIComponent(openPane)}`);
@@ -64,7 +66,7 @@ export async function checkDroplet(browser: Browser, origin: string): Promise<vo
     const clearance = await page.evaluate(() => {
       const probe = document.querySelector(".droplet-probe")!;
       const safeTop = Number.parseFloat(getComputedStyle(probe).paddingTop) || 0;
-      return Math.max(safeTop, document.querySelector(".app-header")?.getBoundingClientRect().bottom ?? 0) + 12;
+      return Math.max(safeTop, document.querySelector(".app-header, .mobile-topbar")?.getBoundingClientRect().bottom ?? 0) + 12;
     });
     assert.ok(Math.abs(box.y - clearance) <= 2, `card top ${box.y}, clearance ${clearance}`);
     assert.ok(Math.abs(box.x + box.width / 2 - 195) <= 1, `card centre ${box.x + box.width / 2}`);

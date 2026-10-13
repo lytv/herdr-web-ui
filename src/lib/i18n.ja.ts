@@ -137,6 +137,8 @@ export const JA: Record<string, string> = {
   "Off on this device": "この端末ではオフ",
   "More": "その他",
   "More · alerts are off": "その他 · 通知オフ",
+  "More · notices": "その他 · お知らせ",
+  "More · notices · alerts are off": "その他 · お知らせ · 通知オフ",
   "Alerts off on this device — tap to turn them on": "このデバイスでは通知がオフです。タップするとオンになります",
   "On in this tab": "このタブでオン",
   "Alerts on while this tab is open. Tap to turn them off": "このタブを開いている間は通知が届きます。タップするとオフになります",
